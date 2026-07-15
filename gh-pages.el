@@ -40,10 +40,8 @@
        (gh-ui--styled (upcase state) (gh-core--state-face state))
        (gh-ui--styled (format "#%s" (plist-get resource :number))
                       'gh-resource-number)
-       (gh-ui--styled (plist-get resource :title) 'gh-resource-title)
-       (gh-ui--styled author 'gh-author)
-       (gh-ui--styled
-        (gh-core--date (alist-get 'updatedAt data)) 'gh-date))
+       (gh-ui--styled (plist-get resource :title) 'gh-resource-title))
+      (gh-ui--insert-header "Author" author 'gh-author)
       (gh-ui--insert-header "Labels"
                             (gh-core--names (alist-get 'labels data))
                             'gh-label)
@@ -51,7 +49,10 @@
         (gh-ui--insert-header
          "Assigned" (gh-core--names (alist-get 'assignees data))
          'gh-author))
-      (gh-ui--insert-header "Comments" comment-count))))
+      (gh-ui--insert-header "Comments" comment-count)
+      (gh-ui--insert-header "Updated"
+                            (gh-core--date (alist-get 'updatedAt data))
+                            'gh-date))))
 
 ;;; User status
 
@@ -143,10 +144,10 @@
         (format "Assigned pull requests (%d)" (length assigned-prs))
         (dolist (item assigned-prs) (gh-pages--insert-topic context 'pr item)))
       (gh-ui--section (my-prs 'my-prs nil nil)
-        (format "My pull requests (%d)" (length my-prs))
+        "My pull requests"
         (dolist (item my-prs) (gh-pages--insert-topic context 'pr item))))
     (gh-ui--section (repositories 'repositories nil nil)
-      (format "Repositories (%d recent)" (length repositories))
+      "Repositories"
       (dolist (repo repositories)
         (let ((resource (gh-pages--repo-resource context repo)))
           (gh-ui--section (repository (plist-get resource :repository) resource t)
@@ -154,12 +155,13 @@
              (gh-ui--styled
               (downcase (alist-get 'visibility repo))
               'gh-permission)
-             (gh-ui--styled (plist-get resource :repository) 'gh-repository)
-             (gh-ui--styled (alist-get 'viewerPermission repo)
-                            'gh-permission)
-             (gh-ui--styled
-              (gh-core--date (alist-get 'updatedAt repo))
-              'gh-date))
+             (gh-ui--styled (plist-get resource :repository) 'gh-repository))
+            (gh-ui--insert-header "Permission"
+                                  (alist-get 'viewerPermission repo)
+                                  'gh-permission)
+            (gh-ui--insert-header "Updated"
+                                  (gh-core--date (alist-get 'updatedAt repo))
+                                  'gh-date)
             (gh-ui--insert-markdown
              (or (alist-get 'description repo) "") context)))))))
 
@@ -214,7 +216,7 @@
     (gh-ui--insert-header "Location" (alist-get 'location user))
     (insert "\n")
     (gh-ui--section (repositories 'repositories nil nil)
-      (format "Repositories (%d)" (length repositories))
+      "Repositories"
       (dolist (repo repositories)
         (let ((resource (gh-pages--repo-resource context repo)))
           (gh-ui--insert-resource-line
@@ -223,10 +225,10 @@
             (alist-get 'description repo))
            resource))))
     (gh-ui--section (issues 'issues nil t)
-      (format "Issues (%d)" (length issues))
+      "Issues"
       (dolist (item issues) (gh-pages--insert-topic context 'issue item)))
     (gh-ui--section (pull-requests 'pull-requests nil t)
-      (format "Pull requests (%d)" (length prs))
+      "Pull requests"
       (dolist (item prs) (gh-pages--insert-topic context 'pr item)))))
 
 (defun gh-user-profile (login &optional context preview)

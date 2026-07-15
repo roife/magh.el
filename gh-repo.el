@@ -65,6 +65,9 @@
    (list
     (cons 'repository
           (lambda (ok fail) (gh-api--repo-get context ok fail force)))
+    (cons 'viewer-forked
+          (lambda (ok fail)
+            (gh-api--repo-viewer-forked-p context ok fail force)))
     (cons 'languages
           (lambda (ok fail) (gh-api--repo-languages context ok fail force)))
     (cons 'issues
@@ -78,6 +81,9 @@
     (cons 'runs
           (lambda (ok fail)
             (gh-api--run-list context (list :limit 10) ok fail force)))
+    (cons 'commits
+          (lambda (ok fail)
+            (gh-api--commit-list context (list :limit 5) ok fail force)))
     (cons 'releases
           (lambda (ok fail) (gh-api--release-list context ok fail force))))
    success error))
@@ -148,9 +154,9 @@
              :workflow (gh-ui--styled workflow 'gh-workflow)
              :updated (gh-ui--styled (gh-core--date updated) 'gh-date))
        (pcase kind
-         ('pr '(:state :identifier :title :author :review :updated))
-         ('issue '(:state :identifier :title :author :updated))
-         ('run '(:state :title :workflow :updated))
+         ('pr '(:state :identifier :title :review))
+         ('issue '(:state :identifier :title))
+         ('run '(:state :title :workflow))
          ('release '(:identifier :title))))
       (when (eq kind 'pr)
         (gh-ui--insert-header
@@ -161,19 +167,75 @@
       (when (eq kind 'run)
         (gh-ui--insert-header "Branch" (alist-get 'headBranch data)
                               'gh-branch)
-        (gh-ui--insert-header "Event" (alist-get 'event data)))
+        (gh-ui--insert-header "Event" (alist-get 'event data))
+        (gh-ui--insert-header "Updated" (gh-core--date updated) 'gh-date))
       (when (memq kind '(issue pr))
+        (gh-ui--insert-header "Author" author 'gh-author)
         (gh-ui--insert-header
          "Labels" (gh-core--names (alist-get 'labels data)) 'gh-label)
         (when (eq kind 'issue)
           (gh-ui--insert-header
            "Assigned" (gh-core--names (alist-get 'assignees data))
            'gh-author))
-        (gh-ui--insert-header "Comments" comment-count))
+        (gh-ui--insert-header "Comments" comment-count)
+        (gh-ui--insert-header "Updated" (gh-core--date updated) 'gh-date))
       (when (eq kind 'release)
         (gh-ui--insert-header "State" (downcase state)
                               (gh-core--state-face state))
         (gh-ui--insert-header "Author" author 'gh-author)))))
+
+(defun gh-repo--insert-commit (context data)
+  "Insert recent Commit DATA in CONTEXT."
+  (let* ((sha (alist-get 'sha data))
+         (commit (alist-get 'commit data))
+         (message (alist-get 'message commit))
+         (author (or (gh-core--name (alist-get 'author data))
+                     (gh-core--name (alist-get 'author commit))))
+         (resource (gh-resource-create
+                    'commit context :sha sha
+                    :title (car (split-string message "\n"))
+                    :url (alist-get 'html_url data))))
+    (gh-ui--section (commit sha resource t)
+      (gh-ui--row
+       (gh-ui--styled (substring sha 0 (min 10 (length sha))) 'gh-hash)
+       (gh-ui--styled (gh-resource-title resource) 'gh-resource-title)
+       (gh-ui--styled author 'gh-author)
+       (gh-ui--styled
+        (gh-core--date (alist-get 'date (alist-get 'author commit))) 'gh-date))
+      (gh-ui--insert-header "SHA" sha 'gh-hash)
+      (gh-ui--insert-header "Author" author 'gh-author))))
+
+(defun gh-repo--insert-languages (languages)
+  "Insert language percentages from LANGUAGES without byte counts."
+  (if-let* ((pairs
+             (mapcar (lambda (entry)
+                       (cons (if (symbolp (car entry))
+                                 (symbol-name (car entry))
+                               (format "%s" (car entry)))
+                             (cdr entry)))
+                     languages))
+            (total (apply #'+ (mapcar #'cdr pairs)))
+            ((> total 0)))
+      (dolist (entry (sort pairs (lambda (a b) (> (cdr a) (cdr b)))))
+        (insert
+         (gh-ui--row
+          (gh-ui--styled (concat (car entry) ":") 'gh-metadata-key)
+          (format "%.1f%%" (* 100.0 (/ (cdr entry) (float total)))))
+         "\n"))
+    (insert (propertize "No language data.\n" 'font-lock-face 'shadow))))
+
+(defun gh-repo--viewer-status (repo forked)
+  "Format the current viewer's relationship to REPO and FORKED state."
+  (mapconcat
+   #'identity
+   (list (if (alist-get 'viewerHasStarred repo)
+             "starred"
+           "not starred")
+         (if (equal (alist-get 'viewerSubscription repo) "SUBSCRIBED")
+             "watching"
+           "not watching")
+         (if forked "forked" "not forked"))
+   ", "))
 
 (defun gh-repo--render-status (context result)
   "Render repository status RESULT in CONTEXT."
@@ -182,64 +244,57 @@
          (issues (alist-get 'issues result))
          (prs (alist-get 'prs result))
          (runs (alist-get 'runs result))
-         (releases (alist-get 'releases result))
+         (commits (alist-get 'commits result))
+         (releases (seq-take (alist-get 'releases result) 5))
          (repo-resource (gh-repo--resource repo context))
          (name (alist-get 'nameWithOwner repo))
          (visibility (alist-get 'visibility repo))
          (permission (alist-get 'viewerPermission repo))
+         (viewer-forked (alist-get 'viewer-forked result))
          (stars (alist-get 'stargazerCount repo))
-         (forks (alist-get 'forkCount repo)))
+         (forks (alist-get 'forkCount repo))
+         (watchers (alist-get 'totalCount (alist-get 'watchers repo))))
     (gh-ui--insert-header "Repository" name 'gh-repository repo-resource)
     (gh-ui--insert-header "Visibility" (downcase visibility)
                           'gh-permission)
     (gh-ui--insert-header "User" (and permission (format "(%s)" permission))
                           'gh-permission)
+    (gh-ui--insert-header "Viewer status"
+                          (gh-repo--viewer-status repo viewer-forked))
     (gh-ui--insert-header "Default branch"
                           (gh-core--name (alist-get 'defaultBranchRef repo))
                           'gh-branch)
-    (gh-ui--insert-header "Stats" (format "%s stars, %s forks" stars forks))
+    (gh-ui--insert-header
+     "Stats" (format "%s stars, %s forks, %s watchers"
+                     stars forks watchers))
     (insert "\n")
-    (gh-ui--section (description 'description repo-resource nil)
-      "Description"
-      (gh-ui--insert-markdown (or (alist-get 'description repo)
-                                  "No description.") context))
+    (pcase-let ((`(,summary . ,body)
+                 (gh-ui--message-parts (alist-get 'description repo)
+                                       "No description.")))
+      (gh-ui--section (description 'description repo-resource nil)
+        (gh-ui--styled summary 'magit-diff-revision-summary)
+        (when body (gh-ui--insert-markdown body context))))
     (gh-ui--section (statistics 'statistics
                                 (gh-resource-create 'statistics context) t)
       "Statistics"
-      (gh-ui--insert-header "Stars" stars)
-      (gh-ui--insert-header "Watchers"
-                            (alist-get 'totalCount (alist-get 'watchers repo)))
-      (gh-ui--insert-header "Forks" forks)
-      (gh-ui--insert-header "Open issues"
-                            (alist-get 'totalCount (alist-get 'issues repo)))
-      (gh-ui--insert-header "Size" (and (alist-get 'diskUsage repo)
-                                        (format "%s KiB"
-                                                (alist-get 'diskUsage repo))))
-      (when languages
-        (insert "\n")
-        (let* ((pairs (mapcar (lambda (entry) (cons (symbol-name (car entry))
-                                                     (cdr entry))) languages))
-               (total (apply #'+ (mapcar #'cdr pairs))))
-          (dolist (entry (sort pairs (lambda (a b) (> (cdr a) (cdr b)))))
-            (insert
-             (gh-ui--row
-              (gh-ui--styled (concat (car entry) ":") 'gh-metadata-key)
-              (format "%.1f%%" (* 100.0 (/ (cdr entry) (float total))))
-              (format "(%s bytes)" (cdr entry)))
-             "\n")))))
+      (gh-repo--insert-languages languages))
+    (gh-ui--section (recent-commits 'recent-commits
+                                    (gh-resource-create 'commit-list context) nil)
+      "Recent commits"
+      (dolist (item commits) (gh-repo--insert-commit context item)))
     (gh-ui--section (pull-requests 'pull-requests
                                    (gh-resource-create 'pr-list context) nil)
-      (format "Pull requests (%d)" (length prs))
+      "Pull requests"
       (dolist (item prs) (gh-repo--insert-topic 'pr context item)))
     (gh-ui--section (issues 'issues (gh-resource-create 'issue-list context) nil)
-      (format "Issues (%d)" (length issues))
+      "Issues"
       (dolist (item issues) (gh-repo--insert-topic 'issue context item)))
     (gh-ui--section (actions 'actions (gh-resource-create 'run-list context) nil)
-      (format "Actions (%d recent)" (length runs))
+      "Actions"
       (dolist (item runs) (gh-repo--insert-topic 'run context item)))
     (gh-ui--section (releases 'releases
                               (gh-resource-create 'release-list context) t)
-      (format "Releases (%d recent)" (length releases))
+      "Releases"
       (dolist (item releases) (gh-repo--insert-topic 'release context item)))))
 
 (defun gh-repo--setup-status-keys (context)
@@ -345,39 +400,14 @@
    (gh-repo--buffer-name context "Statistics") context 'statistics
    (gh-context-repository context)
    (lambda (success error force)
-     (gh-core--collect-async
-      (list
-       (cons 'repository
-             (lambda (ok fail) (gh-api--repo-get context ok fail force)))
-       (cons 'languages
-             (lambda (ok fail) (gh-api--repo-languages context ok fail force))))
-      success error))
-   (lambda (data)
-     (let ((repo (alist-get 'repository data))
-           (languages (alist-get 'languages data)))
-       (gh-ui--insert-header "Repository" (gh-context-repository context)
-                             'gh-repository)
-       (insert "\n")
-       (gh-ui--section (statistics 'repository-statistics nil nil)
-         "Repository"
-         (dolist (entry `(("Stars" . ,(alist-get 'stargazerCount repo))
-                          ("Forks" . ,(alist-get 'forkCount repo))
-                          ("Size" . ,(and (alist-get 'diskUsage repo)
-                                          (format "%s KiB"
-                                                  (alist-get 'diskUsage repo))))))
-           (gh-ui--insert-header (car entry) (cdr entry))))
-       (gh-ui--section (languages 'languages nil nil)
-         "Languages"
-         (let ((total (apply #'+ (mapcar #'cdr languages))))
-           (dolist (entry (sort (copy-sequence languages)
-                                (lambda (a b) (> (cdr a) (cdr b)))))
-             (insert
-              (gh-ui--row
-               (gh-ui--styled
-                (concat (symbol-name (car entry)) ":") 'gh-metadata-key)
-               (format "%.2f%%" (* 100.0 (/ (cdr entry) (float total))))
-               (format "%s bytes" (cdr entry)))
-              "\n"))))))))
+     (gh-api--repo-languages context success error force))
+   (lambda (languages)
+     (gh-ui--insert-header "Repository" (gh-context-repository context)
+                           'gh-repository)
+     (insert "\n")
+     (gh-ui--section (languages 'languages nil nil)
+       "Languages"
+       (gh-repo--insert-languages languages)))))
 
 ;;; Structured creation and settings
 

@@ -293,6 +293,29 @@ HEADERS is a list of complete header strings."
          "--json" (gh-api--fields gh-api--repo-fields))
    callback errback :force force :domain (gh-api--domain context 'repository)))
 
+(defun gh-api--repo-viewer-forked-p
+    (context callback errback &optional force)
+  "Return whether the current viewer owns a fork of CONTEXT."
+  (setq context (gh-api--context context t))
+  (pcase-let* ((`(,owner ,name)
+                (split-string (gh-context-repository context) "/" t))
+               (query
+                (concat
+                 "query($owner:String!,$name:String!){"
+                 "repository(owner:$owner,name:$name){"
+                 "forks(first:1,affiliations:[OWNER]){totalCount}}}")))
+    (gh-api--read-json
+     context
+     (list "api" "graphql" "-f" (concat "query=" query)
+           "-F" (format "owner=%s" owner)
+           "-F" (format "name=%s" name))
+     callback errback :force force
+     :transform
+     (lambda (data)
+       (> (or (gh-api--json-at data 'data 'repository 'forks 'totalCount) 0)
+          0))
+     :domain (gh-api--domain context 'viewer-fork))))
+
 (defun gh-api--repo-languages (context callback errback &optional force)
   "Fetch repository language byte counts."
   (setq context (gh-api--context context t))
@@ -400,6 +423,7 @@ HEADERS is a list of complete header strings."
            (when (gh-api--true-p (plist-get values :clone)) (list "--clone"))
            (when (gh-api--true-p (plist-get values :remote)) (list "--remote")))
    (list (gh-api--domain context 'repository)
+         (gh-api--domain context 'viewer-fork)
          (gh-api--domain context 'repository-list))
    callback errback))
 

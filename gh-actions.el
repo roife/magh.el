@@ -56,13 +56,11 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
        (gh-ui--styled title 'gh-resource-title)
        (if workflow-page
            (gh-ui--styled branch 'gh-branch)
-         (gh-ui--styled workflow 'gh-workflow))
-       (and (not workflow-page) (gh-ui--styled created 'gh-date)))
+         (gh-ui--styled workflow 'gh-workflow)))
       (unless workflow-page
         (gh-ui--insert-header "Branch" branch 'gh-branch))
       (gh-ui--insert-header "Event" (alist-get 'event data))
-      (when workflow-page
-        (gh-ui--insert-header "Created" created 'gh-date))
+      (gh-ui--insert-header "Created" created 'gh-date)
       (gh-ui--insert-header "Commit" (alist-get 'headSha data)
                             'gh-hash))))
 
@@ -160,6 +158,12 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
                           (gh-resource-create
                            'commit context :sha (alist-get 'headSha data)))
     (gh-ui--insert-header "Event" (alist-get 'event data))
+    (gh-ui--insert-header "Created"
+                          (gh-core--date (alist-get 'createdAt data))
+                          'gh-date)
+    (gh-ui--insert-header "Updated"
+                          (gh-core--date (alist-get 'updatedAt data))
+                          'gh-date)
     (insert "\n")
     (dolist (job (alist-get 'jobs data))
       (gh-actions--render-job context id job))))
@@ -200,6 +204,36 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
       (special-mode))
     buffer))
 
+(defun gh-actions--short-log-time (payload)
+  "Shorten an ISO timestamp prefix in Actions log PAYLOAD to HH:MM:SS."
+  (if (string-match
+       "\\`[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T\\([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\\)\\(?:\\.[0-9]+\\)?Z\\(.*\\)\\'"
+       payload)
+      (concat (match-string 1 payload) (match-string 2 payload))
+    payload))
+
+(defun gh-actions--simplify-log (text)
+  "Group repeated job and step columns in Actions log TEXT.
+The `gh run view --log' output repeats both columns on every line.  Emit each
+job and step once, shorten ISO timestamps, and preserve ANSI escapes."
+  (let (last-job last-step lines)
+    (dolist (line (split-string (or text "") "\n"))
+      (if (string-match "\\`\\([^\t]+\\)\t\\([^\t]+\\)\t\\(.*\\)\\'" line)
+          (let ((job (match-string 1 line))
+                (step (match-string 2 line))
+                (payload (gh-actions--short-log-time
+                          (match-string 3 line))))
+            (unless (equal job last-job)
+              (when last-job (push "" lines))
+              (push (gh-ui--styled job 'gh-workflow) lines)
+              (setq last-job job last-step nil))
+            (unless (equal step last-step)
+              (push (concat "  " (gh-ui--styled step 'gh-resource-title)) lines)
+              (setq last-step step))
+            (push payload lines))
+        (push line lines)))
+    (string-join (nreverse lines) "\n")))
+
 (defun gh-run-log (&optional context id job-id)
   "Open complete log for Run ID, optionally restricted to JOB-ID."
   (interactive)
@@ -218,7 +252,7 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
        (lambda (text)
          (let ((inhibit-read-only t))
            (erase-buffer)
-           (gh-ui--insert-ansi text)
+           (gh-ui--insert-ansi (gh-actions--simplify-log text))
            (goto-char (point-min))))
        (lambda (error)
          (let ((inhibit-read-only t))

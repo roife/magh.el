@@ -52,13 +52,7 @@
                        (format "#%s" (alist-get 'number data))
                        'gh-resource-number)
           :title (gh-ui--styled (alist-get 'title data)
-                                'gh-resource-title)
-          :author (gh-ui--styled
-                   (gh-core--name (alist-get 'author data))
-                   'gh-author)
-          :updated (gh-ui--styled
-                    (gh-core--date (alist-get 'updatedAt data))
-                    'gh-date))))
+                                'gh-resource-title))))
 
 (defun gh-issue--insert-row (context data)
   "Insert a native Issue row from DATA."
@@ -66,6 +60,9 @@
          (number (plist-get resource :number)))
     (gh-ui--section (issue number resource t)
       (gh-ui--format-row (gh-issue--row-values data))
+      (gh-ui--insert-header "Author"
+                            (gh-core--name (alist-get 'author data))
+                            'gh-author)
       (gh-ui--insert-header "Labels"
                             (gh-core--names (alist-get 'labels data))
                             'gh-label)
@@ -76,6 +73,9 @@
                             (gh-core--comments-count data))
       (gh-ui--insert-header "Created"
                             (gh-core--date (alist-get 'createdAt data))
+                            'gh-date)
+      (gh-ui--insert-header "Updated"
+                            (gh-core--date (alist-get 'updatedAt data))
                             'gh-date))))
 
 (defun gh-issue--render-list (context state data)
@@ -157,7 +157,7 @@
          (number (alist-get 'number data))
          (title (alist-get 'title data))
          (state (alist-get 'state data)))
-    (insert (propertize (format "#%s  " number)
+    (insert (propertize (format "#%s " number)
                         'font-lock-face 'gh-resource-number)
             (propertize title 'font-lock-face 'gh-resource-title) "\n")
     (add-text-properties (line-beginning-position 0) (point)
@@ -180,9 +180,12 @@
                      (gh-core--date (alist-get 'updatedAt data)))
      'gh-date)
     (insert "\n")
-    (gh-ui--section (description 'description resource nil)
-      "Description"
-      (gh-ui--insert-markdown (alist-get 'body data) context))
+    (pcase-let ((`(,summary . ,body)
+                 (gh-ui--message-parts (alist-get 'body data)
+                                       "No description.")))
+      (gh-ui--section (description 'description resource nil)
+        (gh-ui--styled summary 'magit-diff-revision-summary)
+        (when body (gh-ui--insert-markdown body context))))
     (dolist (comment (alist-get 'comments data))
       (gh-issue--render-comment context comment))
     (when-let* ((closing-prs

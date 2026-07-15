@@ -29,6 +29,26 @@
     '("api" "repos/o/r/items" "--method" "GET" "--paginate" "--slurp"
       "-F" "page=2" "-F" "enabled=true" "-f" "name=two words"))))
 
+(ert-deftest gh-api-repo-viewer-fork-uses-owner-affiliation ()
+  (let ((context (gh-context-from-repository "acme/widgets"))
+        captured result)
+    (cl-letf (((symbol-function 'gh-client--json-async)
+               (lambda (argv success _error &rest keys)
+                 (setq captured (cons argv keys))
+                 (funcall success
+                          '((data . ((repository .
+                                     ((forks . ((totalCount . 1)))))))))
+                 'request)))
+      (gh-api--repo-viewer-forked-p
+       context (lambda (value) (setq result value)) #'ignore t))
+    (should result)
+    (should (member "owner=acme" (car captured)))
+    (should (member "name=widgets" (car captured)))
+    (should (string-match-p
+             (regexp-quote "forks(first:1,affiliations:[OWNER])")
+             (cadr (member "-f" (car captured)))))
+    (should (plist-get (cdr captured) :force))))
+
 (ert-deftest gh-api-paginated-content-contracts-are-normalized-once ()
   (should
    (equal (gh-api--flatten-pages

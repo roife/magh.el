@@ -237,10 +237,8 @@ When FORCE is non-nil, bypass the shared query cache."
        (gh-ui--styled title 'gh-resource-title)
        (and (eq gh-magit-summary-scope 'user)
             (gh-ui--styled (format "[%s]" repo) 'gh-repository))
-       (gh-ui--styled author 'gh-author)
-       (and review (gh-ui--styled review (gh-core--state-face review)))
-       (gh-ui--styled
-        (gh-core--date (alist-get 'updatedAt data)) 'gh-date))
+       (and review (gh-ui--styled review (gh-core--state-face review))))
+      (gh-ui--insert-header "Author" author 'gh-author)
       (when (eq kind 'pr)
         (when-let* ((head (alist-get 'headRefName data))
                     (base (alist-get 'baseRefName data)))
@@ -257,7 +255,10 @@ When FORCE is non-nil, bypass the shared query cache."
         (gh-ui--insert-header
          "Assigned"
          (gh-core--names (alist-get 'assignees data)) 'gh-author))
-      (gh-ui--insert-header "Comments" (gh-core--comments-count data)))))
+      (gh-ui--insert-header "Comments" (gh-core--comments-count data))
+      (gh-ui--insert-header "Updated"
+                            (gh-core--date (alist-get 'updatedAt data))
+                            'gh-date))))
 
 (defun gh-magit--insert-run (context data)
   "Insert one Actions run DATA row in CONTEXT."
@@ -272,15 +273,17 @@ When FORCE is non-nil, bypass the shared query cache."
                       'gh-resource-title)
        (gh-ui--styled (or (alist-get 'workflowName data)
                           (alist-get 'name data))
-                      'gh-workflow)
-       (gh-ui--styled
-        (gh-core--date (alist-get 'createdAt data)) 'gh-date))
+                      'gh-workflow))
       (gh-ui--insert-header "Branch"
                             (alist-get 'headBranch data) 'gh-branch)
-      (gh-ui--insert-header "Event" (alist-get 'event data)))))
+      (gh-ui--insert-header "Event" (alist-get 'event data))
+      (gh-ui--insert-header "Created"
+                            (gh-core--date (alist-get 'createdAt data))
+                            'gh-date))))
 
 (defun gh-magit--insert-group (heading kind context items)
   "Insert HEADING containing KIND rows from ITEMS in CONTEXT."
+  (gh-ui--ensure-section-gap)
   (magit-insert-section (gh-group heading)
     (magit-insert-heading heading)
     (magit-insert-section-body
@@ -304,6 +307,7 @@ When FORCE is non-nil, bypass the shared query cache."
                                    (alist-get 'headRefName item)))
                           items)))
            (other (seq-difference items current #'equal)))
+      (gh-ui--ensure-section-gap)
       (magit-insert-section (gh-pull-requests)
         (magit-insert-heading "Pull requests")
         (magit-insert-section-body
@@ -311,12 +315,14 @@ When FORCE is non-nil, bypass the shared query cache."
             (gh-magit--insert-group "Current branch" 'pr context current))
           (gh-magit--insert-group "Open" 'pr context other)))))
   (when (memq 'issue sections)
+    (gh-ui--ensure-section-gap)
     (magit-insert-section (gh-issues)
       (magit-insert-heading "Issues")
       (magit-insert-section-body
         (gh-magit--insert-group "Open" 'issue context
                                 (alist-get 'issue data)))))
   (when (memq 'run sections)
+    (gh-ui--ensure-section-gap)
     (magit-insert-section (gh-actions)
       (magit-insert-heading "Actions")
       (magit-insert-section-body
@@ -326,6 +332,7 @@ When FORCE is non-nil, bypass the shared query cache."
 (defun gh-magit--insert-user-data (context sections data)
   "Insert user-scoped SECTIONS from DATA in CONTEXT."
   (when (memq 'pr sections)
+    (gh-ui--ensure-section-gap)
     (magit-insert-section (gh-pull-requests)
       (magit-insert-heading "Pull requests")
       (magit-insert-section-body
@@ -337,6 +344,7 @@ When FORCE is non-nil, bypass the shared query cache."
           (gh-magit--insert-group (car group) 'pr context
                                   (alist-get (cdr group) data))))))
   (when (memq 'issue sections)
+    (gh-ui--ensure-section-gap)
     (magit-insert-section (gh-issues)
       (magit-insert-heading "Issues")
       (magit-insert-section-body
@@ -346,6 +354,7 @@ When FORCE is non-nil, bypass the shared query cache."
           (gh-magit--insert-group (car group) 'issue context
                                   (alist-get (cdr group) data))))))
   (when (memq 'run sections)
+    (gh-ui--ensure-section-gap)
     (magit-insert-section (gh-actions)
       (magit-insert-heading "Actions")
       (magit-insert-section-body
@@ -371,6 +380,7 @@ When FORCE is non-nil, bypass the shared query cache."
       (unless (or (plist-get entry :loading) (gh-magit--fresh-p entry))
         (gh-magit--start-request key context sections))
       (setq entry (gethash key gh-magit--cache))
+      (gh-ui--ensure-section-gap)
       (magit-insert-section (github)
         (magit-insert-heading "GitHub")
         (magit-insert-section-body

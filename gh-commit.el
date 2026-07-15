@@ -140,7 +140,7 @@
                           'gh-author)
     (gh-ui--insert-header "AuthorDate"
                           (gh-core--date (alist-get 'date author)) 'gh-date)
-    (gh-ui--insert-header "Committer"
+    (gh-ui--insert-header "Commit"
                           (format "%s <%s>"
                                   (alist-get 'name committer)
                                   (alist-get 'email committer))
@@ -158,9 +158,12 @@
         (gh-ui--insert-header "Parent" (alist-get 'sha parent)
                               'gh-hash parent-resource)))
     (insert "\n")
-    (gh-ui--section (message 'message resource nil)
-      (car (split-string (alist-get 'message commit) "\n"))
-      (gh-ui--insert-markdown (alist-get 'message commit) context))
+    (pcase-let ((`(,summary . ,body)
+                 (gh-ui--message-parts (alist-get 'message commit)
+                                       "(no message)")))
+      (gh-ui--section (message 'message resource nil)
+        (gh-ui--styled summary 'magit-diff-revision-summary)
+        (when body (gh-ui--insert-markdown body context))))
     (gh-ui--section (changed-files 'changed-files nil nil)
       (format "Changed files (%d)" (length files))
       (dolist (file files)

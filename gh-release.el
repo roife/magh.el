@@ -93,7 +93,7 @@
             (gh-resource-create 'tree (gh-context-copy context :ref target)
                                 :ref target :path ""))))
     (setq gh-release--tag tag)
-    (insert (propertize tag 'font-lock-face 'gh-tag) "  "
+    (insert (propertize tag 'font-lock-face 'gh-tag) " "
             (propertize (gh-resource-title resource)
                         'font-lock-face 'gh-resource-title) "\n")
     (add-text-properties (line-beginning-position 0) (point)
@@ -107,10 +107,12 @@
                           (gh-core--date (alist-get 'publishedAt data))
                           'gh-date)
     (insert "\n")
-    (gh-ui--section (description 'description resource nil)
-      "Description"
-      (gh-ui--insert-markdown (or (alist-get 'body data)
-                                  "No release notes.") context))
+    (pcase-let ((`(,summary . ,body)
+                 (gh-ui--message-parts (alist-get 'body data)
+                                       "No release notes.")))
+      (gh-ui--section (description 'description resource nil)
+        (gh-ui--styled summary 'magit-diff-revision-summary)
+        (when body (gh-ui--insert-markdown body context))))
     (let ((assets (alist-get 'assets data)))
       (gh-ui--section (assets 'assets nil nil)
         (format "Assets (%d)" (length assets))

@@ -60,13 +60,7 @@
                        'gh-resource-number)
           :title (gh-ui--styled (alist-get 'title data)
                                 'gh-resource-title)
-          :author (gh-ui--styled
-                   (gh-core--name (alist-get 'author data))
-                   'gh-author)
-          :review (gh-ui--styled review (gh-core--state-face review))
-          :updated (gh-ui--styled
-                    (gh-core--date (alist-get 'updatedAt data))
-                    'gh-date))))
+          :review (gh-ui--styled review (gh-core--state-face review)))))
 
 (defun gh-pr--insert-row (context data)
   "Insert Pull Request DATA as a native section row."
@@ -79,6 +73,9 @@
                           (alist-get 'headRefName data)
                           (alist-get 'baseRefName data))
        'gh-branch)
+      (gh-ui--insert-header "Author"
+                            (gh-core--name (alist-get 'author data))
+                            'gh-author)
       (gh-ui--insert-header "Review"
                             (or (alist-get 'reviewDecision data) "—")
                             (gh-core--state-face
@@ -90,6 +87,9 @@
                             (gh-core--comments-count data))
       (gh-ui--insert-header "Created"
                             (gh-core--date (alist-get 'createdAt data))
+                            'gh-date)
+      (gh-ui--insert-header "Updated"
+                            (gh-core--date (alist-get 'updatedAt data))
                             'gh-date))))
 
 (defun gh-pr--render-list (context state data)
@@ -239,8 +239,10 @@
                       (gh-resource-create 'comment context :id id))))
         (gh-ui--section (comment id resource nil)
           (concat
-           (pcase kind ('review "Review") ('inline "Inline comment")
-             (_ "Comment"))
+           (gh-ui--styled
+            (pcase kind ('review "Review") ('inline "Inline comment")
+              (_ "Comment"))
+            'gh-conversation-kind)
            " by " (or (gh-ui--styled author 'gh-author) "")
            (if state
                (concat " " (gh-ui--styled
@@ -264,7 +266,7 @@
          (base-ref (alist-get 'baseRefName pr))
          (state (if (alist-get 'isDraft pr)
                     "DRAFT" (alist-get 'state pr))))
-    (insert (propertize (format "#%s  " number)
+    (insert (propertize (format "#%s " number)
                         'font-lock-face 'gh-resource-number)
             (propertize (alist-get 'title pr)
                         'font-lock-face 'gh-resource-title) "\n")
@@ -283,9 +285,12 @@
                           (gh-core--names (alist-get 'labels pr))
                           'gh-label)
     (insert "\n")
-    (gh-ui--section (description 'description resource nil)
-      "Description"
-      (gh-ui--insert-markdown (alist-get 'body pr) context))
+    (pcase-let ((`(,summary . ,body)
+                 (gh-ui--message-parts (alist-get 'body pr)
+                                       "No description.")))
+      (gh-ui--section (description 'description resource nil)
+        (gh-ui--styled summary 'magit-diff-revision-summary)
+        (when body (gh-ui--insert-markdown body context))))
     (gh-ui--section (commits 'commits
                              (gh-resource-create 'pr-commits context
                                                  :number number) nil)

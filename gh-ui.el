@@ -45,6 +45,9 @@
   "Face for Issue and Pull Request numbers." :group 'gh)
 (defface gh-resource-title '((t :inherit magit-section-secondary-heading))
   "Face for resource titles." :group 'gh)
+(defface gh-conversation-kind
+  '((t :inherit magit-section-secondary-heading :weight bold))
+  "Face for Comment, Review, and Inline comment type labels." :group 'gh)
 (defface gh-repository '((t :inherit magit-branch-remote))
   "Face for repository names." :group 'gh)
 (defface gh-branch '((t :inherit magit-branch-local))
@@ -142,11 +145,19 @@
 (defmacro gh-ui--section (spec heading &rest body)
   "Insert a native section described by SPEC, HEADING, and BODY.
 SPEC is (TYPE KEY RESOURCE &optional HIDE).  KEY is stable across refreshes and
-RESOURCE is a structured resource plist."
+RESOURCE is a structured resource plist.  Top-level sections and consecutive
+comment sections are separated by one blank line.  Description and comment
+sections enable `visual-line-mode' for their page."
   (declare (indent 2) (debug t))
   (let ((resource-var (gensym "resource")))
     (pcase-let ((`(,type ,key ,resource . ,rest) spec))
       `(let ((,resource-var ,resource))
+         (when (and (memq ',type '(description comment inline-comment))
+                    (not visual-line-mode))
+           (visual-line-mode 1))
+         (when (or (eq magit-insert-section--current magit-root-section)
+                   (memq ',type '(comment inline-comment)))
+           (gh-ui--ensure-section-gap))
          (magit-insert-section
              (,type
               (gh-section-value-create :key ,key :resource ,resource-var)
@@ -158,6 +169,17 @@ RESOURCE is a structured resource plist."
                                     (list 'gh-resource ,resource-var))))
            (magit-insert-section-body
              ,@body))))))
+
+(defun gh-ui--ensure-section-gap ()
+  "Ensure one blank line before a following sibling section.
+Do not add space before the first child of the current parent."
+  (when (and magit-insert-section--current
+             (oref magit-insert-section--current children)
+             (> (point) (1+ (point-min)))
+             (not (equal (buffer-substring-no-properties
+                          (- (point) 2) (point))
+                         "\n\n")))
+    (insert "\n")))
 
 (defun gh-ui--section-resource (&optional section)
   "Return structured resource stored in SECTION or current section."
@@ -383,7 +405,7 @@ non-nil, runs in the page buffer after mode initialization."
     (propertize (format "%s" value) 'font-lock-face face)))
 
 (defun gh-ui--row (&rest values)
-  "Join non-empty VALUES with two spaces, preserving text properties.
+  "Join non-empty VALUES with one space, preserving text properties.
 Rows intentionally have no column widths, padding, or truncation; their shape
 matches ordinary Magit section headings and the layouts in doc/UI.md."
   (mapconcat
@@ -395,7 +417,7 @@ matches ordinary Magit section headings and the layouts in doc/UI.md."
                                    (format "%s" value))))
                        (unless (string-empty-p text) text))))
                  values))
-   "  "))
+   " "))
 
 (defun gh-ui--format-row (values &optional fields)
   "Join semantic FIELDS from plist VALUES without fixed-width columns."
@@ -553,22 +575,39 @@ must use `font-lock-face' to survive just-in-time refontification."
            (gh-resource-create 'user context
                                :login (match-string-no-properties 1))))))))
 
+(defun gh-ui--normalize-newlines (text)
+  "Return TEXT with CRLF and lone CR line endings converted to LF."
+  (string-replace "\r" "\n"
+                  (string-replace "\r\n" "\n" (or text ""))))
+
 (defun gh-ui--insert-markdown (text &optional context)
   "Insert Markdown TEXT with GFM fontification and native resource links."
+  (unless visual-line-mode
+    (visual-line-mode 1))
   (let ((start (point)))
-    (insert (gh-ui--fontified-string text 'gfm-mode))
+    (insert (gh-ui--fontified-string
+             (gh-ui--normalize-newlines text) 'gfm-mode))
     (unless (bolp) (insert "\n"))
     (let ((end (point)))
       (gh-ui--linkify-references start end (or context gh-buffer-context))
       (gh-ui--load-inline-images start end))))
 
+(defun gh-ui--message-parts (text &optional fallback)
+  "Return TEXT as a Magit-style (SUMMARY . BODY) pair.
+The first line becomes the section heading and is not repeated in BODY.
+FALLBACK supplies a summary when TEXT is empty."
+  (let* ((content (string-trim (gh-ui--normalize-newlines text)))
+         (content (if (string-empty-p content) (or fallback "") content))
+         (newline (string-match "\n" content))
+         (summary (if newline (substring content 0 newline) content))
+         (body (and newline (string-trim-right
+                             (substring content (1+ newline))))))
+    (cons summary (and body (not (string-empty-p body)) body))))
+
 (defun gh-ui--insert-diff (text)
   "Insert and fontify diff TEXT."
-  (let ((start (point)))
-    (insert (gh-ui--fontified-string text 'diff-mode))
-    (unless (bolp) (insert "\n"))
-    (font-lock-prepend-text-property
-     start (point) 'font-lock-face 'default)))
+  (insert (gh-ui--fontified-string text 'diff-mode))
+  (unless (bolp) (insert "\n")))
 
 (defun gh-ui--insert-ansi (text)
   "Insert ANSI-colored TEXT safely."
