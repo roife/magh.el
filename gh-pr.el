@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -28,8 +27,6 @@
 (defvar-local gh-pr--limit nil)
 (defvar-local gh-pr--dispatch-resource nil)
 (defvar-local gh-pr--view-number nil)
-
-(autoload 'gh-commit-review "gh-commit" nil t)
 
 (defun gh-pr--context (&optional context)
   "Resolve repository CONTEXT for a Pull Request command."
@@ -545,7 +542,7 @@ CALLBACK receives template text, or an empty string when no template exists."
                 context path (gh-context-ref context)
                 (lambda (data) (funcall callback (gh-api--decode-content data)))
                 (lambda (_error) (try (cdr remaining))))
-             (gh-api--content-list
+             (gh-api--content-get
               context ".github/PULL_REQUEST_TEMPLATE" (gh-context-ref context)
               (lambda (items)
                 (let* ((files (seq-filter

@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (consult "2.0") (transient "0.7.0"))
 
 ;;; Commentary:
 

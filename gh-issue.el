@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -332,7 +331,7 @@
   (interactive)
   (setq context (gh-issue--context context))
   (message "Fetching Issue templates…")
-  (gh-api--content-list
+  (gh-api--content-get
    context ".github/ISSUE_TEMPLATE" (gh-context-ref context)
    (lambda (items) (gh-issue--choose-template context items))
    (lambda (_error) (gh-issue--open-create-editor context nil ""))))

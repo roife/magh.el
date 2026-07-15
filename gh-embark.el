@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github, convenience
-;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -32,8 +31,6 @@
 
 (defvar gh-embark--saved-keymaps nil
   "Embark category entries replaced by `gh-embark-mode'.")
-
-(defvar gh-embark-mode nil)
 
 (defconst gh-embark--category-maps
   '((gh-repository . gh-embark-repository-map)

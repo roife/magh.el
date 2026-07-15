@@ -4,8 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (magit "4.0.0")
-;;                    (markdown-mode "2.6"))
 
 ;;; Commentary:
 
@@ -197,8 +195,7 @@ Do not add space before the first child of the current parent."
 
 (defun gh-ui-resource-at-point ()
   "Return the structured resource at point."
-  (or (get-text-property (point) 'gh-resource)
-      (get-text-property (line-beginning-position) 'gh-resource)
+  (or (gh-candidate-at-point)
       (let* ((section (magit-current-section))
              (value (and section (oref section value))))
         (when (gh-section-value-p value)
@@ -423,8 +420,7 @@ matches ordinary Magit section headings and the layouts in doc/UI.md."
    (delq nil
          (mapcar (lambda (value)
                    (when value
-                     (let ((text (if (stringp value) value
-                                   (format "%s" value))))
+                     (let ((text (format "%s" value)))
                        (unless (string-empty-p text) text))))
                  values))
    " "))
@@ -492,9 +488,7 @@ must use `font-lock-face' to survive just-in-time refontification."
     (unwind-protect
         (when (and (buffer-live-p target) (overlay-buffer overlay)
                    (null (plist-get status :error)))
-          (let* ((start (if (markerp url-http-end-of-headers)
-                            (marker-position url-http-end-of-headers)
-                          url-http-end-of-headers))
+          (let* ((start (marker-position url-http-end-of-headers))
                  (size (- (point-max) start)))
             (when (<= size gh-view-inline-image-max-bytes)
               (let* ((bytes (buffer-substring-no-properties start (point-max)))

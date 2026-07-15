@@ -4,8 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (consult "2.0") (marginalia "1.0")
-;;                    (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -277,27 +275,24 @@
            (unless state
              (setq state 'running)
              (funcall sink '[indicator running])
-             (let ((new-request
-                    (gh-search--repository-list-fetch
-                     context kind
-                     (lambda (items)
-                       (when (eq state 'running)
-                         (setq state 'finished request nil)
-                         (funcall sink 'flush)
-                         (funcall sink
-                                  (gh-search--candidates context kind items))
-                         (funcall sink '[indicator finished])
-                         (funcall sink 'refresh)))
-                     (lambda (error)
-                       (when (eq state 'running)
-                         (setq state 'failed request nil)
-                         (funcall sink '[indicator failed])
-                         (funcall sink 'refresh)
-                         (message "gh repository search: %s"
-                                  (gh-error-message error)))))))
-               ;; A test double or cache may invoke its callback immediately.
-               (when (eq state 'running)
-                 (setq request new-request))))
+             (setq request
+                   (gh-search--repository-list-fetch
+                    context kind
+                    (lambda (items)
+                      (when (eq state 'running)
+                        (setq state 'finished request nil)
+                        (funcall sink 'flush)
+                        (funcall sink
+                                 (gh-search--candidates context kind items))
+                        (funcall sink '[indicator finished])
+                        (funcall sink 'refresh)))
+                    (lambda (error)
+                      (when (eq state 'running)
+                        (setq state 'failed request nil)
+                        (funcall sink '[indicator failed])
+                        (funcall sink 'refresh)
+                        (message "gh repository search: %s"
+                                 (gh-error-message error)))))))
            nil)
           ((or 'cancel 'destroy)
            (setq state 'cancelled)

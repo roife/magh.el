@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -147,7 +146,7 @@
       (erase-buffer)
       (insert (propertize "Loading remote repository tree…\n"
                           'font-lock-face 'gh-loading)))
-    (gh-api--content-list
+    (gh-api--content-get
      context path ref
      (lambda (data)
        (when (= generation gh-browse--generation)
@@ -248,7 +247,7 @@
 
 (defun gh-browse--open-file-data (context ref path data &optional line buffer)
   "Open remote file DATA, using raw fallback when necessary."
-    (let ((buffer (or buffer
+  (let ((buffer (or buffer
                     (get-buffer-create
                      (gh-browse--buffer-name context ref path)))))
     (if (equal (alist-get 'encoding data) "base64")

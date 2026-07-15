@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -213,7 +212,7 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
 The `gh run view --log' output repeats both columns on every line.  Emit each
 job and step once, shorten ISO timestamps, and preserve ANSI escapes."
   (let (last-job last-step lines)
-    (dolist (line (split-string (or text "") "\n"))
+    (dolist (line (split-string text "\n"))
       (if (string-match "\\`\\([^\t]+\\)\t\\([^\t]+\\)\t\\(.*\\)\\'" line)
           (let ((job (match-string 1 line))
                 (step (match-string 2 line))
@@ -326,7 +325,6 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
      (let ((path (alist-get 'path metadata)))
        (gh-core--collect-async
         (list
-         (cons 'metadata (lambda (ok _fail) (funcall ok metadata)))
          (cons 'configuration
                (lambda (ok fail)
                  (gh-api--content-get context path ref ok fail force)))
@@ -335,7 +333,9 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
                  (gh-api--run-list
                   context (list :workflow (format "%s" workflow) :branch ref)
                   ok fail force))))
-        success error)))
+        (lambda (result)
+          (funcall success (cons (cons 'metadata metadata) result)))
+        error)))
    error force))
 
 (defun gh-actions--render-workflow (context _workflow ref result)

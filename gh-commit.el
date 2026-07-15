@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -25,7 +24,6 @@
 (defvar-local gh-commit--sha nil)
 (defvar-local gh-commit--review-number nil)
 (defvar-local gh-commit--review-head nil)
-(defvar-local gh-commit--review-base nil)
 
 (defvar gh-commit--review-drafts (make-hash-table :test #'equal)
   "Local Pull Request review drafts keyed by host, repository, PR, and head.")
@@ -686,7 +684,6 @@
                               :url (alist-get 'url pr))))
     (setq gh-commit--review-number number
           gh-commit--review-head head
-          gh-commit--review-base base
           gh-commit--sha head)
     (let ((start (point)))
       (insert (propertize (format "PR #%s  " number)

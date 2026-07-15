@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -185,21 +184,19 @@
 
 ;;; Structured create/edit
 
-(defun gh-release--branch-fetch (context)
-  "Return asynchronous branch completion provider for CONTEXT."
-  (lambda (success error)
-    (gh-api--repo-branches
-     context
-     (lambda (items)
-       (funcall success (mapcar (lambda (item)
-                                  (alist-get 'name item)) items)))
-     error)))
-
 (defun gh-release--fields (context &optional creating)
   "Return Release editor fields for CONTEXT."
   (append
    '((:name tag :required t) (:name title))
-   `((:name target :completion-fetch ,(gh-release--branch-fetch context))
+   `((:name target
+      :completion-fetch
+      ,(lambda (success error)
+         (gh-api--repo-branches
+          context
+          (lambda (items)
+            (funcall success (mapcar (lambda (item) (alist-get 'name item))
+                                     items)))
+          error)))
      (:name draft :type boolean)
      (:name prerelease :type boolean))
    (when creating '((:name generate-notes :type boolean)))))

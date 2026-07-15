@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -138,8 +137,9 @@
                  (push (cons key (gh-client--cache-entry-created value)) entries))
                gh-client--cache)
       (setq entries (sort entries (lambda (a b) (< (cdr a) (cdr b)))))
-      (dotimes (index (- (length entries) gh-client-cache-max-entries))
-        (remhash (car (nth index entries)) gh-client--cache)))))
+      (dolist (entry (take (- (length entries) gh-client-cache-max-entries)
+                           entries))
+        (remhash (car entry) gh-client--cache)))))
 
 (defun gh-client--finish (request process)
   "Finish REQUEST after PROCESS exits."

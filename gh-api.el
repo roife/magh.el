@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -68,11 +67,6 @@
     isPrerelease name publishedAt tagName tarballUrl targetCommitish uploadUrl
     url zipballUrl))
 
-(cl-defstruct (gh-api--operation
-               (:constructor gh-api--operation-create))
-  "A cancellable API operation composed of multiple asynchronous requests."
-  current cancelled finished)
-
 (defun gh-api--fields (fields)
   "Return comma-separated JSON FIELDS."
   (mapconcat #'symbol-name fields ","))
@@ -83,23 +77,7 @@
 
 (defun gh-api--cancel (request)
   "Cancel asynchronous API REQUEST."
-  (if (gh-api--operation-p request)
-      (unless (or (gh-api--operation-cancelled request)
-                  (gh-api--operation-finished request))
-        (setf (gh-api--operation-cancelled request) t)
-        (when-let* ((current (gh-api--operation-current request)))
-          (gh-client-cancel current)))
-    (gh-client-cancel request)))
-
-(defun gh-api--operation-run (operation starter)
-  "Run asynchronous STARTER as the current request of OPERATION.
-STARTER returns a `gh-client' request."
-  (unless (or (gh-api--operation-cancelled operation)
-              (gh-api--operation-finished operation))
-    (let ((request (funcall starter)))
-      (unless (gh-api--operation-finished operation)
-        (setf (gh-api--operation-current operation) request))))
-  operation)
+  (gh-client-cancel request))
 
 (defun gh-api--repo-args (context)
   "Return GitHub CLI repository arguments for CONTEXT."
@@ -194,7 +172,7 @@ Call CALLBACK with data, optionally processed by TRANSFORM."
 
 (defun gh-api--repeated-flags (flag values)
   "Return repeated FLAG arguments for VALUES."
-  (cl-mapcan (lambda (value) (list flag value)) values))
+  (seq-mapcat (lambda (value) (list flag value)) values))
 
 (defun gh-api--flatten-pages (data)
   "Flatten `gh api --paginate --slurp' DATA."
@@ -216,7 +194,7 @@ HEADERS is a list of complete header strings."
   (append (list "api" endpoint "--method" method)
           (when paginate (list "--paginate" "--slurp"))
           (gh-api--repeated-flags "-H" headers)
-          (cl-mapcan
+          (seq-mapcat
            (lambda (field)
              (let ((key (car field)) (value (cdr field)))
                (list (if (or (numberp value)
@@ -718,16 +696,11 @@ HEADERS is a list of complete header strings."
 
 (defun gh-api--pr-review-thread-pages (data)
   "Return review thread metadata nodes from paginated GraphQL DATA."
-  (let (nodes)
-    (dolist (page (if (and (listp data) (alist-get 'data data))
-                      (list data)
-                    data))
-      (setq nodes
-            (append
-             nodes
-             (gh-api--json-at page 'data 'repository 'pullRequest
-                              'reviewThreads 'nodes))))
-    nodes))
+  (seq-mapcat
+   (lambda (page)
+     (gh-api--json-at page 'data 'repository 'pullRequest
+                      'reviewThreads 'nodes))
+   data))
 
 (defun gh-api--pr-review-thread-metadata
     (context number callback errback &optional force)
@@ -769,7 +742,7 @@ HEADERS is a list of complete header strings."
     (dolist (comment comments)
       (if-let* ((root-id (alist-get 'in_reply_to_id comment)))
           (puthash root-id
-                   (append (gethash root-id replies-by-root) (list comment))
+                   (cons comment (gethash root-id replies-by-root))
                    replies-by-root)
         (push comment roots)))
     (mapcar
@@ -806,7 +779,8 @@ HEADERS is a list of complete header strings."
            (viewer_can_unresolve . ,(gh-api--true-p
                                       (alist-get 'viewerCanUnresolve thread)))
            (resolved_by . ,(alist-get 'resolvedBy thread))
-           (comments . ,(cons root (gethash root-id replies-by-root))))))
+           (comments . ,(cons root
+                              (nreverse (gethash root-id replies-by-root)))))))
      (nreverse roots))))
 
 (defun gh-api--pr-review-threads
@@ -1039,10 +1013,7 @@ degrades to readable and replyable threads without resolution capabilities."
       (dolist (pair '((:line . line) (:side . side)
                       (:start-line . startLine) (:start-side . startSide)))
         (when (plist-member comment (car pair))
-          (setq input
-                (append input
-                        (list (cons (cdr pair)
-                                    (plist-get comment (car pair)))))))))
+          (push (cons (cdr pair) (plist-get comment (car pair))) input))))
     input))
 
 (defun gh-api--pr-review
@@ -1054,8 +1025,7 @@ review input only supports line threads, so this function creates or reuses a
 pending review, adds every LINE or FILE thread asynchronously, and submits it.
 When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
   (setq context (gh-api--context context t))
-  (let* ((operation (gh-api--operation-create))
-         (domains (list (gh-api--domain context 'pr number)
+  (let* ((domains (list (gh-api--domain context 'pr number)
                         (gh-api--domain context 'pr-review-comment number)
                         (gh-api--domain context 'pr-review-thread number)))
          (event-name (upcase (symbol-name event)))
@@ -1066,38 +1036,22 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
         (signal 'gh-invalid-input
                 (list "Every review comment requires a non-empty path and body"))))
     (cl-labels
-        ((fail
-          (error)
-          (setf (gh-api--operation-finished operation) t
-                (gh-api--operation-current operation) nil)
-          (funcall errback error))
-         (finish
-          (result)
-          (setf (gh-api--operation-finished operation) t
-                (gh-api--operation-current operation) nil)
-          (funcall callback result))
-         (start
-          (starter)
-          (gh-api--operation-run operation starter))
-         (mutate
+        ((mutate
           (query input domains success failure)
-          (start
-           (lambda ()
-             (gh-api--mutate-json
-              context graphql-argv domains success failure
-              :stdin (gh-api--graphql-payload
-                      query `((input . ,input)))))))
+          (gh-api--mutate-json
+           context graphql-argv domains success failure
+           :stdin (gh-api--graphql-payload query `((input . ,input)))))
          (rollback
           (review-id original-error owned)
-          (if (or (not owned) (gh-api--operation-cancelled operation))
-              (fail original-error)
-            (mutate
-             (concat
-              "mutation($input:DeletePullRequestReviewInput!){"
-              "deletePullRequestReview(input:$input){clientMutationId}}")
-             `((pullRequestReviewId . ,review-id)) nil
-             (lambda (_) (fail original-error))
-             (lambda (_) (fail original-error)))))
+          (if owned
+              (mutate
+               (concat
+                "mutation($input:DeletePullRequestReviewInput!){"
+                "deletePullRequestReview(input:$input){clientMutationId}}")
+               `((pullRequestReviewId . ,review-id)) nil
+               (lambda (_) (funcall errback original-error))
+               (lambda (_) (funcall errback original-error)))
+            (funcall errback original-error)))
          (submit
           (review-id owned)
           (let ((input
@@ -1109,7 +1063,7 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
               "mutation($input:SubmitPullRequestReviewInput!){"
               "submitPullRequestReview(input:$input){"
               "pullRequestReview{id state}}}")
-             input domains #'finish
+             input domains callback
              (lambda (error) (rollback review-id error owned)))))
          (add-threads
           (review-id remaining owned)
@@ -1137,11 +1091,12 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
                      'pullRequestReview 'id)))
                (if review-id
                    (add-threads review-id comments t)
-                 (fail
+                 (funcall
+                  errback
                   (gh-core--error
                    'gh-api-error
                    "GitHub did not return the pending review ID")))))
-           #'fail))
+           errback))
          (find-pending
           (pull-request-id)
           (let ((query
@@ -1149,48 +1104,45 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
                   "query($id:ID!){node(id:$id){... on PullRequest{"
                   "reviews(last:100,states:[PENDING]){"
                   "nodes{id viewerDidAuthor commit{oid}}}}}}}")))
-            (start
-             (lambda ()
-               (gh-api--read-json
-                context graphql-argv
-                (lambda (result)
-                  (let* ((nodes
-                          (gh-api--json-at
-                           result 'data 'node 'reviews 'nodes))
-                         (pending
-                          (seq-find
-                           (lambda (review)
-                             (gh-api--true-p
-                              (alist-get 'viewerDidAuthor review)))
-                           nodes)))
-                    (cond
-                     ((and pending head-sha
-                           (alist-get 'commit pending)
-                           (not (equal head-sha
-                                       (alist-get 'oid
-                                                  (alist-get 'commit pending)))))
-                      (fail
-                       (gh-core--error
-                        'gh-api-error
-                        "Pending review belongs to an older Pull Request head")))
-                     ((alist-get 'id pending)
-                      (add-threads (alist-get 'id pending) comments nil))
-                     (t (create-pending pull-request-id)))))
-                #'fail :cache nil
-                :stdin (gh-api--graphql-payload
-                        query `((id . ,pull-request-id))))))))
+            (gh-api--read-json
+             context graphql-argv
+             (lambda (result)
+               (let* ((nodes
+                       (gh-api--json-at
+                        result 'data 'node 'reviews 'nodes))
+                      (pending
+                       (seq-find
+                        (lambda (review)
+                          (gh-api--true-p
+                           (alist-get 'viewerDidAuthor review)))
+                        nodes)))
+                 (cond
+                  ((and pending head-sha
+                        (alist-get 'commit pending)
+                        (not (equal head-sha
+                                    (alist-get 'oid
+                                               (alist-get 'commit pending)))))
+                   (funcall
+                    errback
+                    (gh-core--error
+                     'gh-api-error
+                     "Pending review belongs to an older Pull Request head")))
+                  ((alist-get 'id pending)
+                   (add-threads (alist-get 'id pending) comments nil))
+                  (t (create-pending pull-request-id)))))
+             errback :cache nil
+             :stdin (gh-api--graphql-payload
+                     query `((id . ,pull-request-id))))))
          (begin
           (pr)
           (if-let* ((pull-request-id (alist-get 'id pr)))
               (find-pending pull-request-id)
-            (fail
+            (funcall
+             errback
              (gh-core--error
               'gh-api-error
               "Pull Request response has no GraphQL node ID")))))
-      (start
-       (lambda ()
-         (gh-api--pr-get context number #'begin #'fail)))
-      operation)))
+      (gh-api--pr-get context number #'begin errback))))
 
 ;;; Actions
 
@@ -1299,9 +1251,10 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
    context
    (append (list "workflow" "run" (format "%s" workflow))
            (gh-api--flag "--ref" ref)
-           (cl-mapcan (lambda (entry)
-                        (list "--field" (format "%s=%s" (car entry) (cdr entry))))
-                      inputs)
+           (seq-mapcat
+            (lambda (entry)
+              (list "--field" (format "%s=%s" (car entry) (cdr entry))))
+            inputs)
            (gh-api--repo-args context))
    (gh-api--domain context 'run) callback errback))
 
@@ -1518,7 +1471,7 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
                    (when position `((position . ,position)))))
    (gh-api--domain context 'commit-comment sha) callback errback))
 
-(defun gh-api--content-list
+(defun gh-api--content-get
     (context path ref callback errback &optional force)
   "Fetch repository contents at PATH and REF."
   (setq context (gh-api--context context t))
@@ -1531,11 +1484,6 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
     "GET" (when ref `((ref . ,ref))))
    callback errback :force force
    :domain (gh-api--domain context 'content (format "%s:%s" ref path))))
-
-(defun gh-api--content-get
-    (context path ref callback errback &optional force)
-  "Fetch a remote file at PATH and REF."
-  (gh-api--content-list context path ref callback errback force))
 
 (defun gh-api--content-raw
     (context path ref callback errback &optional force)
@@ -1678,7 +1626,7 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
   (gh-api--read-json
    context
    (append (list "api" "graphql" "-f" (concat "query=" query))
-           (cl-mapcan
+           (seq-mapcat
             (lambda (entry)
               (list "-F" (format "%s=%s" (car entry) (cdr entry))))
             variables))

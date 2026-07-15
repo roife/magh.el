@@ -4,7 +4,6 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -106,14 +105,9 @@
 (defun gh-repo--topic-resource (kind context data)
   "Create a resource of KIND in CONTEXT from DATA."
   (pcase kind
-    ('issue
+    ((or 'issue 'pr)
      (gh-resource-create
-      'issue context :number (alist-get 'number data)
-      :title (alist-get 'title data)
-      :url (alist-get 'url data)))
-    ('pr
-     (gh-resource-create
-      'pr context :number (alist-get 'number data)
+      kind context :number (alist-get 'number data)
       :title (alist-get 'title data)
       :url (alist-get 'url data)))
     ('run
@@ -224,10 +218,7 @@
   "Insert language percentages from LANGUAGES without byte counts."
   (if-let* ((pairs
              (mapcar (lambda (entry)
-                       (cons (if (symbolp (car entry))
-                                 (symbol-name (car entry))
-                               (format "%s" (car entry)))
-                             (cdr entry)))
+                       (cons (symbol-name (car entry)) (cdr entry)))
                      languages))
             (total (apply #'+ (mapcar #'cdr pairs)))
             ((> total 0)))

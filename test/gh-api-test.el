@@ -285,10 +285,24 @@
                             (string-match-p "submitPullRequestReview" query))
                           queries))))
 
+(ert-deftest gh-api-review-thread-pages-flatten-slurped-data ()
+  (let* ((data
+          (json-parse-string
+           (concat
+            "[{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":"
+            "{\"nodes\":[{\"id\":\"A\"}]}}}}},"
+            "{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":"
+            "{\"nodes\":[{\"id\":\"B\"}]}}}}}]")
+           :object-type 'alist :array-type 'list))
+         (nodes (gh-api--pr-review-thread-pages data)))
+    (should (equal (mapcar (lambda (node) (alist-get 'id node)) nodes)
+                   '("A" "B")))))
+
 (ert-deftest gh-api-review-threads-group-replies-and-metadata ()
   (let* ((root '((id . 10) (path . "src/a.el") (line . 4)
                  (side . "RIGHT") (body . "Root")))
-         (reply '((id . 11) (in_reply_to_id . 10) (body . "Reply")))
+         (reply-1 '((id . 11) (in_reply_to_id . 10) (body . "First")))
+         (reply-2 '((id . 12) (in_reply_to_id . 10) (body . "Second")))
          (metadata
           '(((id . "THREAD") (path . "src/a.el") (line . 4)
              (diffSide . "RIGHT") (subjectType . "LINE")
@@ -297,7 +311,7 @@
              (viewerCanUnresolve . t)
              (comments . ((nodes . (((databaseId . 10)))))))))
          (threads (gh-api--pr-review-normalize-threads
-                   (list root reply) metadata))
+                   (list root reply-1 reply-2) metadata))
          (thread (car threads)))
     (should (= (length threads) 1))
     (should (equal (alist-get 'id thread) "THREAD"))
@@ -307,7 +321,7 @@
     (should-not (alist-get 'viewer_can_resolve thread))
     (should (equal (mapcar (lambda (item) (alist-get 'id item))
                            (alist-get 'comments thread))
-                   '(10 11)))))
+                   '(10 11 12)))))
 
 (ert-deftest gh-api-review-threads-rest-fallback-remains-replyable ()
   (let* ((thread
