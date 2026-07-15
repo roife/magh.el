@@ -53,6 +53,34 @@
         (should (eq (get-text-property position 'font-lock-face row)
                     (cdr expected)))))))
 
+(ert-deftest gh-search-results-load-only-after-confirmation ()
+  (let* ((context (gh-context-from-repository "o/r"))
+         (resource
+          (gh-search--resource
+           context 'code
+           '((path . "src/a.el")
+             (repository . ((nameWithOwner . "o/r")))
+             (sha . "blob-sha")
+             (url . "https://github.com/o/r/blob/deadbeef/src/a.el"))))
+         (candidate (gh-candidate-string "o/r src/a.el match" resource
+                                         'gh-search 0))
+         opened)
+    (dolist (kind '(repos issues prs code commits))
+      (setq opened nil)
+      (cl-letf (((symbol-function 'consult--async-pipeline)
+                 (lambda (&rest _) 'async-collection))
+                ((symbol-function 'consult--read)
+                 (lambda (_collection &rest options)
+                   (should-not (plist-member options :state))
+                   (funcall (plist-get options :lookup)
+                            (substring-no-properties candidate)
+                            (list candidate))))
+                ((symbol-function 'gh-resource-open)
+                 (lambda (value) (setq opened value))))
+        (gh-search--consult context kind nil nil))
+      (should (eq opened resource)))
+    (should (equal (plist-get opened :ref) "deadbeef"))))
+
 (ert-deftest gh-ui-magit-heading-preserves-row-faces ()
   (let* ((case-fold-search nil)
          (gh-date-format-function #'identity)

@@ -47,12 +47,18 @@
                            :title (alist-get 'title data)
                            :url (alist-get 'url data) :data data))
       ('code
-       (let ((path (alist-get 'path data))
-             (sha (alist-get 'sha data)))
+       (let* ((path (alist-get 'path data))
+              (url (alist-get 'url data))
+              (url-resource (gh-resource-from-url url context))
+              ;; Search returns a blob SHA, but Contents API needs the commit
+              ;; ref embedded in the result URL.
+              (ref (or (and (eq (plist-get url-resource :kind) 'file)
+                            (plist-get url-resource :ref))
+                       (alist-get 'sha data))))
          (gh-resource-create
-          'file (gh-context-copy context :ref sha :path path)
-          :path path :ref sha :fragment (alist-get 'textMatches data)
-          :url (alist-get 'url data) :data data)))
+          'file (gh-context-copy context :ref ref :path path)
+          :path path :ref ref :fragment (alist-get 'textMatches data)
+          :url url :data data)))
       ('commits
        (gh-resource-create 'commit context :sha (alist-get 'sha data)
                            :title (alist-get
@@ -151,7 +157,10 @@
           (consult--read
            collection :prompt (format "GitHub %s search: " kind)
            :initial initial :require-match t :sort nil :category 'gh-search
-           :state (gh-candidate--consult-state)))
+           ;; Recover the original propertized candidate on RET.  Dynamic
+           ;; searches deliberately have no preview: moving through results
+           ;; must not fetch or open the selected resource.
+           :lookup #'consult--lookup-member))
          (resource (get-text-property 0 'gh-resource selected)))
     (gh-resource-open resource)))
 
