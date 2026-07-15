@@ -107,8 +107,8 @@ milestone、Project 和 branch。
   pin/unpin、lock/unlock，以及 `gh-issue-develop` 的关联分支流程。
 - `gh-pr-template-read` 读取单文件或目录形式的 PR Template。
 - `gh-pr-view-commits`、`gh-pr-view-files` 分别查看 PR Commit 和 changed files。
-- `gh-pr-review-comment-add` 收集单行或多行 review comment，
-  `gh-pr-file-comment-add` 收集整文件评论，`gh-pr-review-submit-collected` 一次提交为
+- `gh-commit-review-comment-add` 收集单行或多行 review comment，
+  `gh-commit-review-file-comment-add` 收集整文件评论，`gh-commit-review-submit` 一次提交为
   COMMENT、APPROVE 或 REQUEST_CHANGES。
 - PR 还支持 lock/unlock、Draft/Ready 切换、auto-merge 开关，以及 close 时附加评论并
   删除分支、reopen 时附加评论。

@@ -124,10 +124,6 @@ UNREAD-ONLY defaults to `gh-notifications-unread-only'."
          resource (lambda (_) (gh-resource-open subject)))
       (gh-resource-open subject))))
 
-(defun gh-notify--preview (resource)
-  "Preview notification RESOURCE without changing read state."
-  (gh-resource-preview (plist-get resource :subject-resource)))
-
 (defun gh-notifications-toggle-unread ()
   "Toggle unread-only notification filtering and reopen selection."
   (interactive)
@@ -154,7 +150,8 @@ UNREAD-ONLY defaults to `gh-notifications-unread-only'."
 (gh-candidate-register
  'notification
  :open #'gh-notify--open
- :preview #'gh-notify--preview
+ :preview (lambda (resource)
+            (gh-resource-preview (plist-get resource :subject-resource)))
  :dispatch (lambda (_resource)
              (call-interactively #'gh-notifications-dispatch)))
 

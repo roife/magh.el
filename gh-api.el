@@ -1291,12 +1291,6 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
    callback errback :force force
    :domain (gh-api--domain context 'workflow workflow)))
 
-(defun gh-api--workflow-runs
-    (context workflow ref callback errback &optional force)
-  "Fetch recent runs for WORKFLOW, optionally restricted to REF."
-  (gh-api--run-list context (list :workflow (format "%s" workflow) :branch ref)
-                    callback errback force))
-
 (defun gh-api--workflow-dispatch
     (context workflow ref inputs callback errback)
   "Dispatch WORKFLOW at REF with INPUTS alist."

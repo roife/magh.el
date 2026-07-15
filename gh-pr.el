@@ -30,10 +30,6 @@
 (defvar-local gh-pr--view-number nil)
 
 (autoload 'gh-commit-review "gh-commit" nil t)
-(autoload 'gh-commit-review-comment-add "gh-commit" nil t)
-(autoload 'gh-commit-review-file-comment-add "gh-commit" nil t)
-(autoload 'gh-commit-review-submit "gh-commit" nil t)
-(declare-function gh-commit--add-review-draft "gh-commit" (draft))
 
 (defun gh-pr--context (&optional context)
   "Resolve repository CONTEXT for a Pull Request command."
@@ -681,52 +677,6 @@ CALLBACK receives template text, or an empty string when no template exists."
         (gh-api--pr-get
          context number (lambda (data) (gh-pr--open-edit-editor context number data))
          #'gh-core--user-error)))))
-
-;;; Review entry and compatibility commands
-
-(defun gh-pr-review-comment-add
-    (path line body &optional start-line side context number)
-  "Compatibility wrapper collecting BODY at PATH and LINE.
-START-LINE makes a multi-line comment; SIDE defaults to RIGHT.  CONTEXT and
-NUMBER are retained for call compatibility; collection occurs in the active
-Commit Review page."
-  (interactive
-   (let* ((resource (gh-ui-resource-at-point))
-          (path (or (plist-get resource :path) (read-string "Path: ")))
-          (line (read-number "End line: " (or (plist-get resource :line) 1)))
-          (start (read-number "Start line (same for one line): " line))
-          (body (read-string "Review comment: ")))
-     (list path line body (unless (= start line) start) "RIGHT")))
-  (ignore context number)
-  (unless (eq gh-buffer-resource-kind 'commit-review)
-    (user-error "Open the Pull Request Commit Review page before collecting comments"))
-  (let ((comment (list :path path :line line :side (or side "RIGHT")
-                       :subject-type "LINE" :body body)))
-    (when start-line
-      (setq comment (plist-put comment :start-line start-line)
-            comment (plist-put comment :start-side (or side "RIGHT"))))
-    (gh-commit--add-review-draft comment)))
-
-(defun gh-pr-file-comment-add (path body &optional context number)
-  "Compatibility wrapper collecting whole-file review BODY for PATH."
-  (interactive
-   (let ((resource (gh-ui-resource-at-point)))
-     (list (or (plist-get resource :path) (read-string "Path: "))
-           (read-string "File review comment: "))))
-  (ignore context number)
-  (unless (eq gh-buffer-resource-kind 'commit-review)
-    (user-error "Open the Pull Request Commit Review page before collecting comments"))
-  (gh-commit--add-review-draft
-   (list :path path :subject-type "FILE" :body body)))
-
-;;;###autoload
-(defun gh-pr-review-submit-collected (&optional context number)
-  "Compatibility wrapper submitting drafts from the Commit Review page."
-  (interactive)
-  (ignore context number)
-  (unless (eq gh-buffer-resource-kind 'commit-review)
-    (user-error "Submit reviews from the Pull Request Commit Review page"))
-  (call-interactively #'gh-commit-review-submit))
 
 ;;; Actions
 

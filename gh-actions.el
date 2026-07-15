@@ -94,16 +94,12 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
 
 ;;; Run details
 
-(defun gh-actions--job-resource (context run-id job)
-  "Create a Job resource for JOB in RUN-ID."
-  (gh-resource-create
-   'job context :id (alist-get 'databaseId job)
-   :run-id run-id :title (alist-get 'name job)
-   :url (alist-get 'url job)))
-
 (defun gh-actions--render-job (context run-id job)
   "Render JOB for RUN-ID."
-  (let* ((resource (gh-actions--job-resource context run-id job))
+  (let* ((resource (gh-resource-create
+                    'job context :id (alist-get 'databaseId job)
+                    :run-id run-id :title (alist-get 'name job)
+                    :url (alist-get 'url job)))
          (id (plist-get resource :id))
          (state (or (alist-get 'conclusion job)
                     (alist-get 'status job))))
@@ -336,7 +332,9 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
                  (gh-api--content-get context path ref ok fail force)))
          (cons 'runs
                (lambda (ok fail)
-                 (gh-api--workflow-runs context workflow ref ok fail force))))
+                 (gh-api--run-list
+                  context (list :workflow (format "%s" workflow) :branch ref)
+                  ok fail force))))
         success error)))
    error force))
 

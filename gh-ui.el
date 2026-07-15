@@ -195,18 +195,14 @@ Do not add space before the first child of the current parent."
                          "\n\n")))
     (insert "\n")))
 
-(defun gh-ui--section-resource (&optional section)
-  "Return structured resource stored in SECTION or current section."
-  (let* ((section (or section (magit-current-section)))
-         (value (and section (oref section value))))
-    (when (gh-section-value-p value)
-      (gh-section-value-resource value))))
-
 (defun gh-ui-resource-at-point ()
   "Return the structured resource at point."
   (or (get-text-property (point) 'gh-resource)
       (get-text-property (line-beginning-position) 'gh-resource)
-      (gh-ui--section-resource)))
+      (let* ((section (magit-current-section))
+             (value (and section (oref section value))))
+        (when (gh-section-value-p value)
+          (gh-section-value-resource value)))))
 
 (defun gh-ui--visibility-enabled-p ()
   "Return non-nil when visibility caching applies to this page."
@@ -371,8 +367,8 @@ non-nil, runs in the page buffer after mode initialization."
   (interactive)
   (let* ((resource (gh-ui-resource-at-point))
          (action (and resource
-                      (plist-get (gh-candidate-actions
-                                  (plist-get resource :kind))
+                      (plist-get (gethash (plist-get resource :kind)
+                                          gh-candidate--actions)
                                  :dispatch))))
     (cond
      (action (funcall action resource))

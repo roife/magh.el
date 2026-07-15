@@ -38,10 +38,6 @@ Action functions receive a resource plist."
   (puthash kind actions gh-candidate--actions)
   kind)
 
-(defun gh-candidate-actions (kind)
-  "Return the registered action plist for KIND."
-  (gethash kind gh-candidate--actions))
-
 (defun gh-resource-create (kind context &rest properties)
   "Create a structured resource plist of KIND in CONTEXT.
 PROPERTIES are copied into the returned plist."

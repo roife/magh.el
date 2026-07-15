@@ -67,11 +67,6 @@
   (format "*gh: %s · %s:%s*" (gh-context-repository context)
           ref path))
 
-(defun gh-browse--parent-path (path)
-  "Return parent of repository PATH."
-  (let ((directory (file-name-directory (directory-file-name path))))
-    (if directory (directory-file-name directory) "")))
-
 (defun gh-browse--item-resource (context ref item)
   "Create a native resource from remote content ITEM."
   (let* ((type (alist-get 'type item))
@@ -174,8 +169,11 @@
 (defun gh-browse-parent ()
   "Open the parent remote directory."
   (interactive)
-  (gh-browse-repository (gh-browse--context) gh-browse--ref
-                        (gh-browse--parent-path gh-browse--path)))
+  (let ((directory
+         (file-name-directory (directory-file-name gh-browse--path))))
+    (gh-browse-repository
+     (gh-browse--context) gh-browse--ref
+     (if directory (directory-file-name directory) ""))))
 
 (defun gh-browse-select-ref ()
   "Asynchronously select a branch or tag and reopen the current path."
