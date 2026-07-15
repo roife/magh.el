@@ -28,12 +28,19 @@
   (let* ((kind (pcase-exhaustive kind
                  ('repos 'repository)
                  ('prs 'pr)
+                 ('actions 'run)
+                 ('releases 'release)
+                 ('branches 'branch)
                  ((or 'issues 'code 'commits) kind)))
          (repo (if (eq kind 'repository)
                    (alist-get 'fullName data)
-                 (alist-get 'nameWithOwner (alist-get 'repository data))))
-         (context (gh-context-from-repository
-                   repo (gh-context-host base-context))))
+                 (or (alist-get 'nameWithOwner
+                                (alist-get 'repository data))
+                     (gh-context-repository base-context))))
+         (context (if repo
+                      (gh-context-from-repository
+                       repo (gh-context-host base-context))
+                    base-context)))
     (pcase-exhaustive kind
       ('repository
        (gh-resource-create 'repository context :name repo :title repo
@@ -65,7 +72,23 @@
        (gh-resource-create 'commit context :sha (alist-get 'sha data)
                            :title (alist-get
                                    'message (alist-get 'commit data))
-                           :url (alist-get 'url data) :data data)))))
+                           :url (alist-get 'url data) :data data))
+      ('run
+       (gh-resource-create 'run context :id (alist-get 'databaseId data)
+                           :title (alist-get 'displayTitle data)
+                           :url (alist-get 'url data) :data data))
+      ('release
+       (let ((tag (alist-get 'tagName data)))
+         (gh-resource-create
+          'release context :tag tag
+          :title (or (alist-get 'name data) tag)
+          :url (or (alist-get 'url data)
+                   (gh-context-web-url context (format "releases/tag/%s" tag)))
+          :data data)))
+      ('branch
+       (let ((name (alist-get 'name data)))
+         (gh-resource-create 'branch (gh-context-copy context :ref name)
+                             :name name :title name :data data))))))
 
 (defun gh-search--styled (value face)
   "Return completion VALUE carrying FACE directly."
@@ -90,7 +113,31 @@
         (gh-search--styled (substring sha 0 (min 10 (length sha))) 'gh-hash)
         (gh-search--styled
          (car (split-string (plist-get resource :title) "\n"))
-         'gh-resource-title))))))
+         'gh-resource-title))))
+    ('run
+     (let* ((data (plist-get resource :data))
+            (state (or (alist-get 'conclusion data)
+                       (alist-get 'status data))))
+       (gh-ui--row
+        (gh-search--styled (upcase (or state ""))
+                           (gh-core--state-face state))
+        (gh-search--styled (gh-resource-title resource) 'gh-resource-title)
+        (gh-search--styled (or (alist-get 'workflowName data)
+                               (alist-get 'name data))
+                           'gh-workflow)
+        (gh-search--styled (alist-get 'headBranch data) 'gh-branch))))
+    ('release
+     (let* ((data (plist-get resource :data))
+            (state (cond ((gh-api--true-p (alist-get 'isDraft data)) "draft")
+                         ((gh-api--true-p (alist-get 'isPrerelease data))
+                          "prerelease")
+                         (t "published"))))
+       (gh-ui--row
+        (gh-search--styled (upcase state) (gh-core--state-face state))
+        (gh-search--styled (plist-get resource :tag) 'gh-tag)
+        (gh-search--styled (gh-resource-title resource) 'gh-resource-title))))
+    ('branch
+     (gh-search--styled (plist-get resource :name) 'gh-branch))))
 
 (defun gh-search--marginalia-annotate (candidate)
   "Annotate gh search CANDIDATE using its structured resource data."
@@ -124,7 +171,26 @@
         ('commit
          (marginalia--fields
           (repository :truncate 24 :face 'gh-repository)
-          (author :truncate 20 :face 'gh-author)))))))
+          (author :truncate 20 :face 'gh-author)))
+        ('run
+         (let ((run-state (or (alist-get 'conclusion data)
+                              (alist-get 'status data))))
+           (marginalia--fields
+            ((upcase (or run-state ""))
+             :face (gh-core--state-face run-state))
+            ((alist-get 'event data) :face 'marginalia-type)
+            ((alist-get 'headBranch data) :face 'gh-branch))))
+        ('release
+         (marginalia--fields
+          ((gh-core--date (or (alist-get 'publishedAt data)
+                              (alist-get 'createdAt data)))
+           :face 'gh-date)))
+        ('branch
+         (marginalia--fields
+          ((and (gh-api--true-p (alist-get 'protected data)) "protected")
+           :face 'gh-permission)
+          ((alist-get 'sha (alist-get 'commit data))
+           :truncate 10 :face 'gh-hash)))))))
 
 (add-to-list 'marginalia-annotators
              '(gh-search gh-search--marginalia-annotate))
@@ -192,6 +258,67 @@
          (resource (get-text-property 0 'gh-resource selected)))
     (gh-resource-open resource)))
 
+(defun gh-search--repository-list-fetch (context kind success error)
+  "Fetch repository-scoped list KIND in CONTEXT."
+  (pcase-exhaustive kind
+    ('actions (gh-api--run-list context (list :limit gh-list-limit)
+                                success error))
+    ('releases (gh-api--release-list context success error))
+    ('branches (gh-api--repo-branches context success error))))
+
+(defun gh-search--repository-list-backend (context kind)
+  "Return a one-shot async Consult backend for repository KIND."
+  (lambda (sink)
+    (let (request state)
+      (lambda (action)
+        (pcase action
+          ((pred stringp)
+           (funcall sink action)
+           (unless state
+             (setq state 'running)
+             (funcall sink '[indicator running])
+             (let ((new-request
+                    (gh-search--repository-list-fetch
+                     context kind
+                     (lambda (items)
+                       (when (eq state 'running)
+                         (setq state 'finished request nil)
+                         (funcall sink 'flush)
+                         (funcall sink
+                                  (gh-search--candidates context kind items))
+                         (funcall sink '[indicator finished])
+                         (funcall sink 'refresh)))
+                     (lambda (error)
+                       (when (eq state 'running)
+                         (setq state 'failed request nil)
+                         (funcall sink '[indicator failed])
+                         (funcall sink 'refresh)
+                         (message "gh repository search: %s"
+                                  (gh-error-message error)))))))
+               ;; A test double or cache may invoke its callback immediately.
+               (when (eq state 'running)
+                 (setq request new-request))))
+           nil)
+          ((or 'cancel 'destroy)
+           (setq state 'cancelled)
+           (when request
+             (gh-api--cancel request)
+             (setq request nil))
+           (funcall sink action))
+          (_ (funcall sink action)))))))
+
+(defun gh-search--consult-repository-list (context kind &optional initial)
+  "Asynchronously search repository KIND with Consult.
+INITIAL seeds the local Consult filter."
+  (let* ((selected
+          (consult--read
+           (gh-search--repository-list-backend context kind)
+           :prompt (format "Repository %s: " kind)
+           :initial initial :require-match t :sort t :category 'gh-search
+           :lookup #'consult--lookup-member))
+         (resource (get-text-property 0 'gh-resource selected)))
+    (gh-resource-open resource)))
+
 ;;;###autoload
 (defun gh-consult-search (kind &optional context initial options)
   "Dynamically search GitHub resource KIND.
@@ -203,6 +330,19 @@ OPTIONS contains API filters."
                                   nil t))))
   (setq context (gh-context-resolve context))
   (gh-search--consult context kind options initial))
+
+(defun gh-repository-consult-search (kind &optional context initial)
+  "Search repository resource KIND with Consult.
+CONTEXT defaults to the current repository and INITIAL seeds the search.
+Issue, Pull Request, code, and commit searches use GitHub search.  Action,
+Release, and branch searches fetch repository data and narrow it locally."
+  (setq context (gh-context-resolve (or context gh-buffer-context) t))
+  (pcase-exhaustive kind
+    ((or 'issues 'prs 'code 'commits)
+     (gh-consult-search kind context initial
+                        (list :repo (gh-context-repository context))))
+    ((or 'actions 'releases 'branches)
+     (gh-search--consult-repository-list context kind initial))))
 
 (defun gh-search-repositories () (interactive) (gh-consult-search 'repos))
 (defun gh-search-issues () (interactive) (gh-consult-search 'issues))
@@ -227,14 +367,10 @@ OPTIONS contains API filters."
   (let* ((kind (intern
                 (completing-read
                  "Repository search type: "
-                 '("issues" "prs" "code" "commits" "releases" "workflows")
-                 nil t)))
-         (repo (gh-context-repository context)))
-    (pcase-exhaustive kind
-      ((or 'issues 'prs 'code 'commits)
-       (gh-consult-search kind context nil (list :repo repo)))
-      ('releases (gh-resource-open (gh-resource-create 'release-list context)))
-      ('workflows (gh-resource-open (gh-resource-create 'workflow-list context))))))
+                 '("issues" "prs" "actions" "releases" "branches"
+                   "code" "commits")
+                 nil t))))
+    (gh-repository-consult-search kind context)))
 
 (gh-candidate-register
  'repository-search

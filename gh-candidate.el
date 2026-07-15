@@ -70,6 +70,11 @@ PROPERTIES are copied into the returned plist."
                       context (format "actions/workflows/%s"
                                       (or (plist-get resource :path)
                                           (plist-get resource :id)))))
+          ('branch
+           (gh-context-web-url
+            context (format "tree/%s"
+                            (or (plist-get resource :name)
+                                (gh-context-ref context)))))
           ((or 'file 'tree)
            (gh-context-web-url
             context

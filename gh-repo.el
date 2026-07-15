@@ -59,6 +59,17 @@
 
 ;;; Status
 
+(defvar-keymap magit-repo-branch-section-map
+  :doc "Keymap for branch rows in Repo Status."
+  "RET" #'gh-ui-visit
+  "<mouse-1>" #'gh-repo-branch-click)
+
+(defun gh-repo-branch-click (event)
+  "Switch to the Repo Status branch clicked by mouse EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (gh-ui-visit))
+
 (defun gh-repo--fetch-status (context success error force)
   "Fetch repository status aggregates in CONTEXT."
   (gh-core--collect-async
@@ -70,6 +81,8 @@
             (gh-api--repo-viewer-forked-p context ok fail force)))
     (cons 'languages
           (lambda (ok fail) (gh-api--repo-languages context ok fail force)))
+    (cons 'branches
+          (lambda (ok fail) (gh-api--repo-branches context ok fail force)))
     (cons 'issues
           (lambda (ok fail)
             (gh-api--issue-list context (list :state "open" :limit 10)
@@ -83,7 +96,9 @@
             (gh-api--run-list context (list :limit 10) ok fail force)))
     (cons 'commits
           (lambda (ok fail)
-            (gh-api--commit-list context (list :limit 5) ok fail force)))
+            (gh-api--commit-list
+             context (list :limit 5 :ref (gh-context-ref context))
+             ok fail force)))
     (cons 'releases
           (lambda (ok fail) (gh-api--release-list context ok fail force))))
    success error))
@@ -224,23 +239,52 @@
          "\n"))
     (insert (propertize "No language data.\n" 'font-lock-face 'shadow))))
 
-(defun gh-repo--viewer-status (repo forked)
-  "Format the current viewer's relationship to REPO and FORKED state."
-  (mapconcat
-   #'identity
-   (list (if (alist-get 'viewerHasStarred repo)
-             "starred"
-           "not starred")
-         (if (equal (alist-get 'viewerSubscription repo) "SUBSCRIBED")
-             "watching"
-           "not watching")
-         (if forked "forked" "not forked"))
-   ", "))
+(defun gh-repo--stats (repo forked)
+  "Format repository statistics and positive viewer states.
+FORKED is non-nil when the current viewer owns a fork of REPO."
+  (format "%s stars%s, %s forks%s, %s watchers%s"
+          (alist-get 'stargazerCount repo)
+          (if (gh-api--true-p (alist-get 'viewerHasStarred repo))
+              " (starred)"
+            "")
+          (alist-get 'forkCount repo)
+          (if forked " (forked)" "")
+          (alist-get 'totalCount (alist-get 'watchers repo))
+          (if (equal (alist-get 'viewerSubscription repo) "SUBSCRIBED")
+              " (watching)"
+            "")))
+
+(defun gh-repo--branch-resource (context data)
+  "Create a branch resource for DATA in CONTEXT."
+  (let ((name (alist-get 'name data)))
+    (gh-resource-create
+     'branch (gh-context-copy context :ref name)
+     :name name :title name :data data)))
+
+(defun gh-repo--insert-branch (context data current-ref)
+  "Insert branch DATA in CONTEXT, marking CURRENT-REF."
+  (let* ((name (alist-get 'name data))
+         (current (equal name current-ref))
+         (resource (gh-repo--branch-resource context data))
+         (sha (alist-get 'sha (alist-get 'commit data))))
+    (gh-ui--section (repo-branch name resource t)
+      (gh-ui--row
+       (and current (gh-ui--styled "*" 'gh-open-state))
+       (propertize (gh-ui--styled name 'gh-branch)
+                   'mouse-face 'highlight
+                   'help-echo "Switch Repo Status to this branch"))
+      (gh-ui--insert-header "Current" (if current "yes" "no"))
+      (gh-ui--insert-header "Protected"
+                            (if (gh-api--true-p (alist-get 'protected data))
+                                "yes"
+                              "no"))
+      (gh-ui--insert-header "SHA" sha 'gh-hash))))
 
 (defun gh-repo--render-status (context result)
   "Render repository status RESULT in CONTEXT."
   (let* ((repo (alist-get 'repository result))
          (languages (alist-get 'languages result))
+         (branches (alist-get 'branches result))
          (issues (alist-get 'issues result))
          (prs (alist-get 'prs result))
          (runs (alist-get 'runs result))
@@ -251,22 +295,18 @@
          (visibility (alist-get 'visibility repo))
          (permission (alist-get 'viewerPermission repo))
          (viewer-forked (alist-get 'viewer-forked result))
-         (stars (alist-get 'stargazerCount repo))
-         (forks (alist-get 'forkCount repo))
-         (watchers (alist-get 'totalCount (alist-get 'watchers repo))))
+         (default-branch (gh-core--name (alist-get 'defaultBranchRef repo)))
+         (current-ref (or (gh-context-ref context)
+                          (gh-context-branch context)
+                          default-branch)))
     (gh-ui--insert-header "Repository" name 'gh-repository repo-resource)
     (gh-ui--insert-header "Visibility" (downcase visibility)
                           'gh-permission)
     (gh-ui--insert-header "User" (and permission (format "(%s)" permission))
                           'gh-permission)
-    (gh-ui--insert-header "Viewer status"
-                          (gh-repo--viewer-status repo viewer-forked))
-    (gh-ui--insert-header "Default branch"
-                          (gh-core--name (alist-get 'defaultBranchRef repo))
-                          'gh-branch)
-    (gh-ui--insert-header
-     "Stats" (format "%s stars, %s forks, %s watchers"
-                     stars forks watchers))
+    (gh-ui--insert-header "Default branch" default-branch 'gh-branch)
+    (gh-ui--insert-header "Branch" current-ref 'gh-branch)
+    (gh-ui--insert-header "Stats" (gh-repo--stats repo viewer-forked))
     (insert "\n")
     (pcase-let ((`(,summary . ,body)
                  (gh-ui--message-parts (alist-get 'description repo)
@@ -278,6 +318,10 @@
                                 (gh-resource-create 'statistics context) t)
       "Statistics"
       (gh-repo--insert-languages languages))
+    (gh-ui--section (branches 'branches nil nil)
+      "Branches"
+      (dolist (item branches)
+        (gh-repo--insert-branch context item current-ref)))
     (gh-ui--section (recent-commits 'recent-commits
                                     (gh-resource-create 'commit-list context) nil)
       "Recent commits"
@@ -631,6 +675,11 @@
                  (gh-repo--fetch-status context ok fail force))
                (lambda (data) (gh-repo--render-status context data))
                :preview t))))
+
+(gh-candidate-register
+ 'branch
+ :open (lambda (resource)
+         (gh-repo-status (plist-get resource :context))))
 
 (gh-candidate-register
  'statistics :open (lambda (resource) (gh-statistics (plist-get resource :context))))
