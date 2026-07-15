@@ -7,7 +7,8 @@
 ;; URL: https://github.com/roife/gh.el
 ;; Keywords: tools, vc, github
 ;; Package-Requires: ((emacs "31.1") (magit "4.0.0") (consult "2.0")
-;;                    (transient "0.7.0") (markdown-mode "2.6"))
+;;                    (marginalia "1.0") (transient "0.7.0")
+;;                    (markdown-mode "2.6"))
 
 ;;; Commentary:
 

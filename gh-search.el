@@ -4,7 +4,8 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "31.1") (consult "2.0") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (consult "2.0") (marginalia "1.0")
+;;                    (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -15,6 +16,7 @@
 
 (require 'cl-lib)
 (require 'consult)
+(require 'marginalia)
 (require 'subr-x)
 (require 'transient)
 (require 'gh-api)
@@ -65,41 +67,67 @@
                                    'message (alist-get 'commit data))
                            :url (alist-get 'url data) :data data)))))
 
+(defun gh-search--styled (value face)
+  "Return completion VALUE carrying FACE directly."
+  (when (and value (not (equal value "")))
+    (propertize (format "%s" value) 'face face)))
+
 (defun gh-search--format (resource)
   "Format search RESOURCE as a completion candidate."
-  (let ((data (plist-get resource :data)))
-    (pcase-exhaustive (plist-get resource :kind)
-      ('repository
+  (pcase-exhaustive (plist-get resource :kind)
+    ('repository
+     (gh-search--styled (plist-get resource :repository) 'gh-repository))
+    ((or 'issue 'pr)
+     (gh-ui--row
+      (gh-search--styled (format "#%s" (plist-get resource :number))
+                         'gh-resource-number)
+      (gh-search--styled (plist-get resource :title) 'gh-resource-title)))
+    ('file
+     (gh-search--styled (plist-get resource :path) 'gh-file))
+    ('commit
+     (let ((sha (plist-get resource :sha)))
        (gh-ui--row
-        (gh-ui--styled (plist-get resource :repository) 'gh-repository)
-        (gh-ui--styled
-         (format "★%s" (alist-get 'stargazersCount data))
-         'gh-permission)
-        (alist-get 'description data)))
-      ((or 'issue 'pr)
-       (let ((state (alist-get 'state data)))
-         (gh-ui--row
-          (gh-ui--styled (upcase state) (gh-core--state-face state))
-          (concat
-           (gh-ui--styled (plist-get resource :repository) 'gh-repository)
-           (gh-ui--styled (format "#%s" (plist-get resource :number))
-                          'gh-resource-number))
-          (gh-ui--styled (plist-get resource :title) 'gh-resource-title))))
-      ('file
-       (let* ((matches (alist-get 'textMatches data))
-              (fragment (and matches
-                             (alist-get 'fragment (car matches)))))
-         (gh-ui--row
-          (gh-ui--styled (plist-get resource :repository) 'gh-repository)
-          (gh-ui--styled (plist-get resource :path) 'gh-file)
-          (string-trim (or fragment "")))))
-      ('commit
-       (gh-ui--row
-        (gh-ui--styled (plist-get resource :repository) 'gh-repository)
-        (gh-ui--styled (substring (plist-get resource :sha) 0 10) 'gh-hash)
-        (gh-ui--styled
+        (gh-search--styled (substring sha 0 (min 10 (length sha))) 'gh-hash)
+        (gh-search--styled
          (car (split-string (plist-get resource :title) "\n"))
          'gh-resource-title))))))
+
+(defun gh-search--marginalia-annotate (candidate)
+  "Annotate gh search CANDIDATE using its structured resource data."
+  (when-let* ((resource (get-text-property 0 'gh-resource candidate)))
+    (let* ((data (plist-get resource :data))
+           (repository (plist-get resource :repository))
+           (state (alist-get 'state data))
+           (author (or (gh-core--name (alist-get 'author data))
+                       (gh-core--name
+                        (alist-get 'author (alist-get 'commit data))))))
+      (pcase-exhaustive (plist-get resource :kind)
+        ('repository
+         (marginalia--fields
+          ((and-let* ((stars (alist-get 'stargazersCount data)))
+             (format "★%s" stars))
+           :face 'marginalia-number)
+          ((alist-get 'description data)
+           :truncate 1.0 :face 'marginalia-documentation)))
+        ((or 'issue 'pr)
+         (marginalia--fields
+          (repository :truncate 24 :face 'gh-repository)
+          ((upcase (or state "")) :face (gh-core--state-face state))
+          (author :truncate 20 :face 'gh-author)))
+        ('file
+         (marginalia--fields
+          (repository :truncate 24 :face 'gh-repository)
+          ((and-let* ((matches (alist-get 'textMatches data))
+                      (fragment (alist-get 'fragment (car matches))))
+             (string-trim fragment))
+           :truncate 1.0 :face 'font-lock-string-face)))
+        ('commit
+         (marginalia--fields
+          (repository :truncate 24 :face 'gh-repository)
+          (author :truncate 20 :face 'gh-author)))))))
+
+(add-to-list 'marginalia-annotators
+             '(gh-search gh-search--marginalia-annotate))
 
 (defun gh-search--candidates (context kind items)
   "Convert search ITEMS into propertized candidates."

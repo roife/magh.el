@@ -19,6 +19,7 @@ GitHub Enterprise host 选择都交给 `gh`。
 - `gh`，并已执行 `gh auth login`
 - Magit 4.0+（UI 直接使用其 `magit-section`）
 - `consult` 2.0+
+- `marginalia` 1.0+（Search annotation）
 - `transient` 0.7+
 - `markdown-mode` 2.6+（Description 和评论的 GFM 渲染）
 
@@ -143,7 +144,8 @@ target、Latest、发布、删除和附件下载。
 Issue 页面支持创建、评论、编辑、关闭和重开。PR 页面支持创建、评论、编辑、diff、
 checkout、review、merge、关闭和重开；详情页会按时间展示普通评论、Review 和行内评论。
 Actions 详情页会把完整日志按 job 分组，另支持 watch、rerun 和 cancel。Release 在
-Emacs 内展示 description、正文与附件。Code Search 候选会直接预览匹配片段。
+Emacs 内展示 description、正文与附件。开启 `marginalia-mode` 后，Search 候选会显示
+repository、state、stars、author 和代码匹配片段等 annotation；未开启时只显示主候选。
 页面内按键可以用 `C-h m` 查看。
 
 Repo/User Status 中，`/` 打开搜索类型菜单；选择后输入两个字符即启动异步搜索。

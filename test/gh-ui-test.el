@@ -72,6 +72,7 @@
                 ((symbol-function 'consult--read)
                  (lambda (_collection &rest options)
                    (should-not (plist-member options :state))
+                   (should-not (plist-member options :annotate))
                    (funcall (plist-get options :lookup)
                             (substring-no-properties candidate)
                             (list candidate))))
@@ -80,6 +81,64 @@
         (gh-search--consult context kind nil nil))
       (should (eq opened resource)))
     (should (equal (plist-get opened :ref) "deadbeef"))))
+
+(ert-deftest gh-search-marginalia-owns-search-annotations ()
+  (let* ((context (gh-context-from-repository "o/r"))
+         (data '((fullName . "o/r") (visibility . "PUBLIC")
+                 (stargazersCount . 12) (description . "Repository summary")))
+         (resource (gh-search--resource context 'repos data))
+         (display (gh-search--format resource))
+         (candidate (gh-candidate-string display resource 'gh-search 0))
+         (annotation (gh-search--marginalia-annotate candidate))
+         (annotation-text (substring-no-properties annotation)))
+    (should (equal (substring-no-properties display) "o/r"))
+    (should (eq (get-text-property 0 'face display) 'gh-repository))
+    (should-not (string-match-p "12\\|Repository summary" display))
+    (should (string-match-p "★12" annotation-text))
+    (should (string-match-p "Repository summary" annotation-text))
+    (should-not (string-match-p "public" annotation-text))
+    (dolist (expected '(("★12" . marginalia-number)
+                        ("Repository summary" . marginalia-documentation)))
+      (let ((position (string-match (regexp-quote (car expected)) annotation)))
+        (should position)
+        (should (eq (get-text-property position 'face annotation)
+                    (cdr expected)))))
+    (should (equal (car (alist-get 'gh-search marginalia-annotators))
+                   'gh-search--marginalia-annotate))))
+
+(ert-deftest gh-search-marginalia-columns-use-semantic-colors ()
+  (let* ((context (gh-context-from-repository "o/r"))
+         (issue
+          (gh-search--resource
+           context 'issues
+           '((number . 7) (title . "Issue") (state . "OPEN")
+             (author . ((login . "alice")))
+             (repository . ((nameWithOwner . "o/r"))))))
+         (issue-candidate
+          (gh-candidate-string (gh-search--format issue) issue 'gh-search 0))
+         (issue-annotation (gh-search--marginalia-annotate issue-candidate))
+         (file
+          (gh-search--resource
+           context 'code
+           '((path . "src/a.el")
+             (repository . ((nameWithOwner . "o/r")))
+             (sha . "blob-sha")
+             (textMatches . (((fragment . "matched code"))))
+             (url . "https://github.com/o/r/blob/deadbeef/src/a.el"))))
+         (file-candidate
+          (gh-candidate-string (gh-search--format file) file 'gh-search 0))
+         (file-display (gh-search--format file))
+         (file-annotation (gh-search--marginalia-annotate file-candidate)))
+    (should (eq (get-text-property 0 'face file-display) 'gh-file))
+    (dolist (case `((,issue-annotation "o/r" gh-repository)
+                    (,issue-annotation "OPEN" gh-open-state)
+                    (,issue-annotation "alice" gh-author)
+                    (,file-annotation "o/r" gh-repository)
+                    (,file-annotation "matched code" font-lock-string-face)))
+      (pcase-let ((`(,annotation ,text ,face) case))
+        (let ((position (string-match (regexp-quote text) annotation)))
+          (should position)
+          (should (eq (get-text-property position 'face annotation) face)))))))
 
 (ert-deftest gh-ui-magit-heading-preserves-row-faces ()
   (let* ((case-fold-search nil)
@@ -291,13 +350,41 @@
           (gh-test-render-page
            'conversation 1
            (lambda (_)
-             (gh-pr--render-conversation context items "main"))
+             (gh-pr--render-conversation context items context "main"))
            nil)))
     (dolist (label '("Comment" "Review" "Inline comment"))
       (let ((position (string-match (regexp-quote label) text)))
         (should position)
         (should (eq (get-text-property position 'font-lock-face text)
                     'gh-conversation-kind))))))
+
+(ert-deftest gh-pr-conversation-uses-fork-location ()
+  (let* ((gh-date-format-function #'identity)
+         (context (gh-context-from-repository "base/repo"))
+         (head-context (gh-context-from-repository "fork/repo"))
+         (head-oid "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+         (items
+          `((review . ((id . "r1") (author . ((login . "alice")))
+                       (submittedAt . "submitted") (state . "APPROVED")
+                       (commit . ((oid . ,head-oid))) (body . "")))
+            (inline . ((id . 2) (user . ((login . "bob")))
+                       (created_at . "created") (path . "src/a.el")
+                       (line . 7) (body . "Inline body")))))
+         (text
+          (gh-test-render-page
+           'conversation 1
+           (lambda (_)
+             (gh-pr--render-conversation
+              context items head-context head-oid))
+           nil)))
+    (should-not (string-match-p "Author: alice\n" text))
+    (should-not (string-match-p "Commit: " text))
+    (let* ((position (string-match "src/a.el:7" text))
+           (resource (and position
+                          (get-text-property position 'gh-resource text))))
+      (should resource)
+      (should (equal (plist-get resource :repository) "fork/repo"))
+      (should (equal (plist-get resource :ref) head-oid)))))
 
 (ert-deftest gh-ui-prose-sections-enable-visual-line-mode ()
   (with-temp-buffer

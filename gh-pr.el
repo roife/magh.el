@@ -184,6 +184,17 @@
      :path path :ref head-ref
      :url (alist-get 'blob_url file))))
 
+(defun gh-pr--head-context (context pr)
+  "Return the head repository context for PR, falling back to CONTEXT."
+  (if-let* ((repository
+             (alist-get 'nameWithOwner (alist-get 'headRepository pr))))
+      (gh-context-from-repository repository (gh-context-host context))
+    context))
+
+(defun gh-pr--head-ref (pr)
+  "Return PR's immutable head ref when available."
+  (or (alist-get 'headRefOid pr) (alist-get 'headRefName pr)))
+
 (defun gh-pr--check-resource (context check)
   "Create Run or web CHECK resource."
   (let ((name (or (alist-get 'name check) (alist-get 'context check)))
@@ -213,8 +224,8 @@
                   (alist-get 'submittedAt (cdr b))
                   (alist-get 'created_at (cdr b)) "")))))
 
-(defun gh-pr--render-conversation (context items head-ref)
-  "Render Pull Request conversation ITEMS."
+(defun gh-pr--render-conversation (context items head-context head-ref)
+  "Render Pull Request conversation ITEMS using HEAD-CONTEXT and HEAD-REF."
   (gh-ui--section (conversation 'conversation nil nil)
     (format "Conversation (%d)" (length items))
     (dolist (item items)
@@ -234,7 +245,8 @@
                    (resource
                     (if path
                         (gh-resource-create
-                         'file (gh-context-copy context :ref head-ref :path path)
+                         'file (gh-context-copy head-context
+                                                :ref head-ref :path path)
                          :path path :ref head-ref :line line)
                       (gh-resource-create 'comment context :id id))))
         (gh-ui--section (comment id resource nil)
@@ -262,7 +274,9 @@
          (checks (alist-get 'statusCheckRollup pr))
          (resource (gh-pr--resource context pr))
          (number (alist-get 'number pr))
-         (head-ref (alist-get 'headRefName pr))
+         (head-name (alist-get 'headRefName pr))
+         (head-context (gh-pr--head-context context pr))
+         (head-ref (gh-pr--head-ref pr))
          (base-ref (alist-get 'baseRefName pr))
          (state (if (alist-get 'isDraft pr)
                     "DRAFT" (alist-get 'state pr))))
@@ -276,7 +290,7 @@
     (gh-ui--insert-header "Author"
                           (gh-core--name (alist-get 'author pr))
                           'gh-author)
-    (gh-ui--insert-header "Branches" (format "%s → %s" head-ref base-ref)
+    (gh-ui--insert-header "Branches" (format "%s → %s" head-name base-ref)
                           'gh-branch)
     (let ((review (alist-get 'reviewDecision pr)))
       (gh-ui--insert-header "Review" (or review "—")
@@ -316,7 +330,8 @@
                            (gh-resource-create 'pr-files context :number number) nil)
       (format "Files (%d)" (length files))
       (dolist (file files)
-        (let ((file-resource (gh-pr--file-resource context file head-ref)))
+        (let ((file-resource
+               (gh-pr--file-resource head-context file head-ref)))
           (gh-ui--section (file (alist-get 'filename file)
                                 file-resource t)
             (gh-ui--row
@@ -339,7 +354,8 @@
              (gh-ui--styled (upcase status) (gh-core--state-face status))
              (gh-ui--styled name 'gh-workflow))))))
     (gh-pr--render-conversation
-     context (gh-pr--conversation-items pr inline-comments) head-ref)))
+     context (gh-pr--conversation-items pr inline-comments)
+     head-context head-ref)))
 
 (defun gh-pr--setup-view (context number)
   "Install detail keys for Pull Request NUMBER in CONTEXT."
@@ -404,14 +420,15 @@
   (let* ((pr (alist-get 'pr result))
          (files (alist-get 'files result))
          (comments (alist-get 'review-comments result))
-         (head-ref (alist-get 'headRefName pr)))
+         (head-context (gh-pr--head-context context pr))
+         (head-ref (gh-pr--head-ref pr)))
     (gh-ui--insert-header "Repository" (gh-context-repository context)
                           'gh-repository)
     (gh-ui--insert-header "Pull Request" (format "#%s changed files" number))
     (insert "\n")
     (dolist (file files)
       (let* ((path (alist-get 'filename file))
-             (resource (gh-pr--file-resource context file head-ref))
+             (resource (gh-pr--file-resource head-context file head-ref))
              (file-comments
               (seq-filter (lambda (comment)
                             (equal (alist-get 'path comment) path))
