@@ -285,5 +285,118 @@
                             (string-match-p "submitPullRequestReview" query))
                           queries))))
 
+(ert-deftest gh-api-review-threads-group-replies-and-metadata ()
+  (let* ((root '((id . 10) (path . "src/a.el") (line . 4)
+                 (side . "RIGHT") (body . "Root")))
+         (reply '((id . 11) (in_reply_to_id . 10) (body . "Reply")))
+         (metadata
+          '(((id . "THREAD") (path . "src/a.el") (line . 4)
+             (diffSide . "RIGHT") (subjectType . "LINE")
+             (isResolved . t) (isOutdated . :json-false)
+             (viewerCanReply . t) (viewerCanResolve . :json-false)
+             (viewerCanUnresolve . t)
+             (comments . ((nodes . (((databaseId . 10)))))))))
+         (threads (gh-api--pr-review-normalize-threads
+                   (list root reply) metadata))
+         (thread (car threads)))
+    (should (= (length threads) 1))
+    (should (equal (alist-get 'id thread) "THREAD"))
+    (should (alist-get 'is_resolved thread))
+    (should-not (alist-get 'is_outdated thread))
+    (should (alist-get 'viewer_can_unresolve thread))
+    (should-not (alist-get 'viewer_can_resolve thread))
+    (should (equal (mapcar (lambda (item) (alist-get 'id item))
+                           (alist-get 'comments thread))
+                   '(10 11)))))
+
+(ert-deftest gh-api-review-threads-rest-fallback-remains-replyable ()
+  (let* ((thread
+          (car (gh-api--pr-review-normalize-threads
+                '(((id . 10) (path . "src/a.el") (line . 4)
+                   (side . "RIGHT") (body . "Root")))
+                nil))))
+    (should-not (alist-get 'id thread))
+    (should (alist-get 'viewer_can_reply thread))
+    (should-not (alist-get 'viewer_can_resolve thread))))
+
+(ert-deftest gh-api-review-reply-uses-top-level-comment-endpoint ()
+  (let ((context (gh-context-from-repository "acme/widgets")) captured)
+    (cl-letf (((symbol-function 'gh-client--mutate-json)
+               (lambda (argv success _error &rest keys)
+                 (setq captured (cons argv keys))
+                 (funcall success '((id . 12)))
+                 'request)))
+      (gh-api--pr-review-reply context 7 10 "Reply body" #'ignore #'ignore))
+    (should (member "repos/acme/widgets/pulls/7/comments/10/replies"
+                    (car captured)))
+    (should (member "body=Reply body" (car captured)))))
+
+(ert-deftest gh-api-review-thread-resolution-carries-thread-id ()
+  (let ((context (gh-context-from-repository "acme/widgets")) payload)
+    (cl-letf (((symbol-function 'gh-client--mutate-json)
+               (lambda (_argv success _error &rest keys)
+                 (setq payload
+                       (json-parse-string
+                        (plist-get keys :stdin)
+                        :object-type 'alist :array-type 'list))
+                 (funcall success '((data . ((resolveReviewThread)))))
+                 'request)))
+      (gh-api--pr-review-thread-resolved
+       context 7 "THREAD" t #'ignore #'ignore))
+    (should (string-match-p "resolveReviewThread"
+                            (alist-get 'query payload)))
+    (should (equal (gh-api--json-at payload 'variables 'input 'threadId)
+                   "THREAD"))))
+
+(ert-deftest gh-api-review-binds-new-pending-review-to-head ()
+  (let ((context (gh-context-from-repository "acme/widgets")) create-input done)
+    (cl-letf (((symbol-function 'gh-api--pr-get)
+               (lambda (_context _number callback _errback &optional _force)
+                 (funcall callback '((id . "PR"))) 'request))
+              ((symbol-function 'gh-client--json-async)
+               (lambda (_argv success _error &rest _keys)
+                 (funcall success
+                          '((data . ((node . ((reviews . ((nodes)))))))))
+                 'request))
+              ((symbol-function 'gh-client--mutate-json)
+               (lambda (_argv success _error &rest keys)
+                 (let* ((payload (json-parse-string
+                                  (plist-get keys :stdin)
+                                  :object-type 'alist :array-type 'list))
+                        (query (alist-get 'query payload))
+                        (input (gh-api--json-at payload 'variables 'input)))
+                   (if (string-match-p "addPullRequestReview(input" query)
+                       (progn
+                         (setq create-input input)
+                         (funcall
+                          success
+                          '((data . ((addPullRequestReview
+                                      . ((pullRequestReview
+                                          . ((id . "REVIEW"))))))))))
+                     (if (string-match-p "submitPullRequestReview" query)
+                         (funcall
+                          success '((data . ((submitPullRequestReview)))))
+                       (ert-fail (format "Unexpected mutation: %s" query)))))
+                 'request)))
+      (gh-api--pr-review context 7 'approve "" nil
+                         (lambda (_) (setq done t)) #'ignore "HEAD"))
+    (should done)
+    (should (equal (alist-get 'pullRequestId create-input) "PR"))
+    (should (equal (alist-get 'commitOID create-input) "HEAD"))))
+
+(ert-deftest gh-api-commit-inline-comment-uses-diff-position ()
+  (let ((context (gh-context-from-repository "acme/widgets")) captured)
+    (cl-letf (((symbol-function 'gh-client--mutate-json)
+               (lambda (argv success _error &rest keys)
+                 (setq captured (cons argv keys))
+                 (funcall success '((id . 1)))
+                 'request)))
+      (gh-api--commit-comment
+       context "HEAD" "Inline body" "src/a.el" 4 #'ignore #'ignore))
+    (should (member "path=src/a.el" (car captured)))
+    (should (member "position=4" (car captured)))
+    (should-not (seq-some (lambda (arg) (string-prefix-p "line=" arg))
+                          (car captured)))))
+
 (provide 'gh-api-test)
 ;;; gh-api-test.el ends here

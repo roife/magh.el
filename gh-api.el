@@ -690,6 +690,20 @@ HEADERS is a list of complete header strings."
    callback errback :force force :transform #'gh-api--flatten-pages
    :domain (gh-api--domain context 'pr-file number)))
 
+(defun gh-api--compare (context base head callback errback &optional force)
+  "Fetch the repository comparison from BASE through HEAD."
+  (setq context (gh-api--context context t))
+  (gh-api--read-json
+   context
+   (gh-api--rest-argv
+    (gh-core--repo-endpoint
+     context (format "compare/%s...%s"
+                     (gh-core--url-path base)
+                     (gh-core--url-path head)))
+    "GET" '((per_page . 100)))
+   callback errback :force force
+   :domain (gh-api--domain context 'comparison (format "%s...%s" base head))))
+
 (defun gh-api--pr-review-comments
     (context number callback errback &optional force)
   "Fetch inline review comments for Pull Request NUMBER."
@@ -701,6 +715,154 @@ HEADERS is a list of complete header strings."
     "GET" '((per_page . 100)) t)
    callback errback :force force :transform #'gh-api--flatten-pages
    :domain (gh-api--domain context 'pr-review-comment number)))
+
+(defun gh-api--pr-review-thread-pages (data)
+  "Return review thread metadata nodes from paginated GraphQL DATA."
+  (let (nodes)
+    (dolist (page (if (and (listp data) (alist-get 'data data))
+                      (list data)
+                    data))
+      (setq nodes
+            (append
+             nodes
+             (gh-api--json-at page 'data 'repository 'pullRequest
+                              'reviewThreads 'nodes))))
+    nodes))
+
+(defun gh-api--pr-review-thread-metadata
+    (context number callback errback &optional force)
+  "Fetch paginated thread metadata for Pull Request NUMBER."
+  (setq context (gh-api--context context t))
+  (pcase-let* ((`(,owner ,name)
+                (split-string (gh-context-repository context) "/" t))
+               (query
+                (concat
+                 "query($owner:String!,$name:String!,$number:Int!,"
+                 "$endCursor:String){repository(owner:$owner,name:$name){"
+                 "pullRequest(number:$number){reviewThreads(first:100,"
+                 "after:$endCursor){nodes{id path line startLine diffSide "
+                 "startDiffSide subjectType isResolved isOutdated "
+                 "viewerCanReply viewerCanResolve viewerCanUnresolve "
+                 "resolvedBy{login} comments(first:1){nodes{databaseId}}}"
+                 "pageInfo{hasNextPage endCursor}}}}}")))
+    (gh-api--read-json
+     context
+     (list "api" "graphql" "--paginate" "--slurp"
+           "-f" (concat "query=" query)
+           "-F" (format "owner=%s" owner)
+           "-F" (format "name=%s" name)
+           "-F" (format "number=%s" number))
+     callback errback :force force :preserve-false t
+     :transform #'gh-api--pr-review-thread-pages
+     :domain (gh-api--domain context 'pr-review-thread number))))
+
+(defun gh-api--pr-review-normalize-threads (comments metadata)
+  "Combine flat REST COMMENTS with GraphQL thread METADATA."
+  (let ((metadata-by-root (make-hash-table :test #'equal))
+        (replies-by-root (make-hash-table :test #'equal))
+        roots)
+    (dolist (thread metadata)
+      (when-let* ((root
+                   (car (gh-api--json-at thread 'comments 'nodes)))
+                  (database-id (alist-get 'databaseId root)))
+        (puthash database-id thread metadata-by-root)))
+    (dolist (comment comments)
+      (if-let* ((root-id (alist-get 'in_reply_to_id comment)))
+          (puthash root-id
+                   (append (gethash root-id replies-by-root) (list comment))
+                   replies-by-root)
+        (push comment roots)))
+    (mapcar
+     (lambda (root)
+       (let* ((root-id (alist-get 'id root))
+              (thread (gethash root-id metadata-by-root))
+              (line (or (alist-get 'line thread)
+                        (alist-get 'line root)
+                        (alist-get 'original_line root)))
+              (start-line (or (alist-get 'startLine thread)
+                              (alist-get 'start_line root)
+                              (alist-get 'original_start_line root)))
+              (side (or (alist-get 'diffSide thread)
+                        (alist-get 'side root)))
+              (start-side (or (alist-get 'startDiffSide thread)
+                              (alist-get 'start_side root))))
+         `((id . ,(alist-get 'id thread))
+           (root_id . ,root-id)
+           (path . ,(or (alist-get 'path thread) (alist-get 'path root)))
+           (line . ,line)
+           (start_line . ,start-line)
+           (side . ,side)
+           (start_side . ,start-side)
+           (subject_type . ,(or (alist-get 'subjectType thread)
+                                (if line "LINE" "FILE")))
+           (is_resolved . ,(gh-api--true-p (alist-get 'isResolved thread)))
+           (is_outdated . ,(gh-api--true-p (alist-get 'isOutdated thread)))
+           (viewer_can_reply . ,(if thread
+                                    (gh-api--true-p
+                                     (alist-get 'viewerCanReply thread))
+                                  t))
+           (viewer_can_resolve . ,(gh-api--true-p
+                                    (alist-get 'viewerCanResolve thread)))
+           (viewer_can_unresolve . ,(gh-api--true-p
+                                      (alist-get 'viewerCanUnresolve thread)))
+           (resolved_by . ,(alist-get 'resolvedBy thread))
+           (comments . ,(cons root (gethash root-id replies-by-root))))))
+     (nreverse roots))))
+
+(defun gh-api--pr-review-threads
+    (context number callback errback &optional force)
+  "Fetch normalized review threads for Pull Request NUMBER.
+REST comments are authoritative for replies.  Missing GraphQL thread metadata
+degrades to readable and replyable threads without resolution capabilities."
+  (setq context (gh-api--context context t))
+  (gh-api--pr-review-comments
+   context number
+   (lambda (comments)
+     (gh-api--pr-review-thread-metadata
+      context number
+      (lambda (metadata)
+        (funcall callback
+                 (gh-api--pr-review-normalize-threads comments metadata)))
+      (lambda (_error)
+        (funcall callback
+                 (gh-api--pr-review-normalize-threads comments nil)))
+      force))
+   errback force))
+
+(defun gh-api--pr-review-reply
+    (context number root-id body callback errback)
+  "Reply with BODY to top-level review comment ROOT-ID on PR NUMBER."
+  (setq context (gh-api--context context t))
+  (gh-api--mutate-json
+   context
+   (gh-api--rest-argv
+    (gh-core--repo-endpoint
+     context (format "pulls/%d/comments/%s/replies" number root-id))
+    "POST" `((body . ,body)))
+   (list (gh-api--domain context 'pr number)
+         (gh-api--domain context 'pr-review-comment number)
+         (gh-api--domain context 'pr-review-thread number))
+   callback errback))
+
+(defun gh-api--pr-review-thread-resolved
+    (context number thread-id resolved callback errback)
+  "Set THREAD-ID resolution state to RESOLVED on Pull Request NUMBER."
+  (setq context (gh-api--context context t))
+  (let* ((field (if resolved "resolveReviewThread" "unresolveReviewThread"))
+         (input-type (if resolved
+                         "ResolveReviewThreadInput!"
+                       "UnresolveReviewThreadInput!"))
+         (query
+          (format
+           "mutation($input:%s){%s(input:$input){thread{id isResolved}}}"
+           input-type field)))
+    (gh-api--mutate-json
+     context '("api" "graphql" "--input" "-")
+     (list (gh-api--domain context 'pr number)
+           (gh-api--domain context 'pr-review-thread number))
+     callback errback
+     :stdin (gh-api--graphql-payload
+             query `((input . ((threadId . ,thread-id))))))))
 
 (defun gh-api--pr-diff (context number callback errback &optional force)
   "Fetch the complete diff for Pull Request NUMBER."
@@ -883,15 +1045,19 @@ HEADERS is a list of complete header strings."
                                     (plist-get comment (car pair)))))))))
     input))
 
-(defun gh-api--pr-review (context number event body comments callback errback)
+(defun gh-api--pr-review
+    (context number event body comments callback errback &optional head-sha)
   "Submit review EVENT with BODY and inline COMMENTS for Pull Request NUMBER.
 COMMENTS is a list of plists with :path and optional :line,
 :start-line, :side, :start-side, :subject-type, and :body.  GitHub's draft
 review input only supports line threads, so this function creates or reuses a
-pending review, adds every LINE or FILE thread asynchronously, and submits it."
+pending review, adds every LINE or FILE thread asynchronously, and submits it.
+When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
   (setq context (gh-api--context context t))
   (let* ((operation (gh-api--operation-create))
-         (domain (gh-api--domain context 'pr))
+         (domains (list (gh-api--domain context 'pr number)
+                        (gh-api--domain context 'pr-review-comment number)
+                        (gh-api--domain context 'pr-review-thread number)))
          (event-name (upcase (symbol-name event)))
          (graphql-argv '("api" "graphql" "--input" "-")))
     (dolist (comment comments)
@@ -943,7 +1109,7 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
               "mutation($input:SubmitPullRequestReviewInput!){"
               "submitPullRequestReview(input:$input){"
               "pullRequestReview{id state}}}")
-             input domain #'finish
+             input domains #'finish
              (lambda (error) (rollback review-id error owned)))))
          (add-threads
           (review-id remaining owned)
@@ -962,7 +1128,8 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
            (concat
             "mutation($input:AddPullRequestReviewInput!){"
             "addPullRequestReview(input:$input){pullRequestReview{id state}}}")
-           `((pullRequestId . ,pull-request-id)) nil
+           (append `((pullRequestId . ,pull-request-id))
+                   (when head-sha `((commitOID . ,head-sha)))) nil
            (lambda (result)
              (let ((review-id
                     (gh-api--json-at
@@ -981,7 +1148,7 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
                  (concat
                   "query($id:ID!){node(id:$id){... on PullRequest{"
                   "reviews(last:100,states:[PENDING]){"
-                  "nodes{id viewerDidAuthor}}}}}}")))
+                  "nodes{id viewerDidAuthor commit{oid}}}}}}}")))
             (start
              (lambda ()
                (gh-api--read-json
@@ -996,10 +1163,19 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
                              (gh-api--true-p
                               (alist-get 'viewerDidAuthor review)))
                            nodes)))
-                    (if-let* ((review-id
-                               (alist-get 'id pending)))
-                        (add-threads review-id comments nil)
-                      (create-pending pull-request-id))))
+                    (cond
+                     ((and pending head-sha
+                           (alist-get 'commit pending)
+                           (not (equal head-sha
+                                       (alist-get 'oid
+                                                  (alist-get 'commit pending)))))
+                      (fail
+                       (gh-core--error
+                        'gh-api-error
+                        "Pending review belongs to an older Pull Request head")))
+                     ((alist-get 'id pending)
+                      (add-threads (alist-get 'id pending) comments nil))
+                     (t (create-pending pull-request-id)))))
                 #'fail :cache nil
                 :stdin (gh-api--graphql-payload
                         query `((id . ,pull-request-id))))))))
@@ -1336,8 +1512,8 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
    callback errback :force force :transform #'gh-api--flatten-pages
    :domain (gh-api--domain context 'commit-comment sha)))
 
-(defun gh-api--commit-comment (context sha body path line callback errback)
-  "Comment BODY on Commit SHA, optionally at PATH and LINE."
+(defun gh-api--commit-comment (context sha body path position callback errback)
+  "Comment BODY on Commit SHA, optionally at PATH and diff POSITION."
   (setq context (gh-api--context context t))
   (gh-api--mutate-json
    context
@@ -1345,7 +1521,7 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
     (gh-core--repo-endpoint context (format "commits/%s/comments" sha))
     "POST" (append `((body . ,body))
                    (when path `((path . ,path)))
-                   (when line `((line . ,line)))))
+                   (when position `((position . ,position)))))
    (gh-api--domain context 'commit-comment sha) callback errback))
 
 (defun gh-api--content-list

@@ -47,7 +47,14 @@
   "Face for resource titles." :group 'gh)
 (defface gh-conversation-kind
   '((t :inherit magit-section-secondary-heading :weight bold))
-  "Face for Comment, Review, and Inline comment type labels." :group 'gh)
+  "Face for conversation type labels." :group 'gh)
+(defface gh-inline-comment
+  '((((class color) (background light))
+     :extend t :background "#eef6ff")
+    (((class color) (background dark))
+     :extend t :background "#263442")
+    (t :extend t))
+  "Face for inline comment blocks." :group 'gh)
 (defface gh-repository '((t :inherit magit-branch-remote))
   "Face for repository names." :group 'gh)
 (defface gh-branch '((t :inherit magit-branch-local))
@@ -164,11 +171,18 @@ sections enable `visual-line-mode' for their page."
               ,(car rest))
            (let ((start (point)))
              (magit-insert-heading ,heading)
+             (when (eq ',type 'inline-comment)
+               (font-lock-append-text-property
+                start (point) 'font-lock-face 'gh-inline-comment))
              (when ,resource-var
                (add-text-properties start (point)
                                     (list 'gh-resource ,resource-var))))
            (magit-insert-section-body
-             ,@body))))))
+             (let ((start (point)))
+               ,@body
+               (when (eq ',type 'inline-comment)
+                 (font-lock-append-text-property
+                  start (point) 'font-lock-face 'gh-inline-comment)))))))))
 
 (defun gh-ui--ensure-section-gap ()
   "Ensure one blank line before a following sibling section.

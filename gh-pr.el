@@ -28,8 +28,12 @@
 (defvar-local gh-pr--limit nil)
 (defvar-local gh-pr--dispatch-resource nil)
 (defvar-local gh-pr--view-number nil)
-(defvar gh-pr--review-comments (make-hash-table :test #'equal)
-  "Collected review comment plists keyed by (HOST REPOSITORY NUMBER).")
+
+(autoload 'gh-commit-review "gh-commit" nil t)
+(autoload 'gh-commit-review-comment-add "gh-commit" nil t)
+(autoload 'gh-commit-review-file-comment-add "gh-commit" nil t)
+(autoload 'gh-commit-review-submit "gh-commit" nil t)
+(declare-function gh-commit--add-review-draft "gh-commit" (draft))
 
 (defun gh-pr--context (&optional context)
   "Resolve repository CONTEXT for a Pull Request command."
@@ -248,22 +252,31 @@
                          'file (gh-context-copy head-context
                                                 :ref head-ref :path path)
                          :path path :ref head-ref :line line)
-                      (gh-resource-create 'comment context :id id))))
-        (gh-ui--section (comment id resource nil)
-          (concat
-           (gh-ui--styled
-            (pcase kind ('review "Review") ('inline "Inline comment")
-              (_ "Comment"))
-            'gh-conversation-kind)
-           " by " (or (gh-ui--styled author 'gh-author) "")
-           (if state
-               (concat " " (gh-ui--styled
-                             state (gh-core--state-face state))) "")
-           " · " (or (gh-ui--styled date 'gh-date) ""))
-          (when path
-            (gh-ui--insert-header "Location" (format "%s:%s" path line)
-                                  'gh-file resource))
-          (gh-ui--insert-markdown (alist-get 'body data) context))))))
+                      (gh-resource-create 'comment context :id id)))
+                   (heading
+                    (concat
+                     (gh-ui--styled
+                      (pcase kind ('review "Review") ('inline "Inline comment")
+                        (_ "Comment"))
+                      'gh-conversation-kind)
+                     " by " (or (gh-ui--styled author 'gh-author) "")
+                     (if state
+                         (concat " " (gh-ui--styled
+                                       state (gh-core--state-face state))) "")
+                     " · " (or (gh-ui--styled date 'gh-date) ""))))
+        (if (eq kind 'inline)
+            (gh-ui--section (inline-comment id resource nil)
+              heading
+              (when path
+                (gh-ui--insert-header
+                 "Location" (format "%s:%s" path line) 'gh-file resource))
+              (gh-ui--insert-markdown (alist-get 'body data) context))
+          (gh-ui--section (comment id resource nil)
+            heading
+            (when path
+              (gh-ui--insert-header
+               "Location" (format "%s:%s" path line) 'gh-file resource))
+            (gh-ui--insert-markdown (alist-get 'body data) context)))))))
 
 (defun gh-pr--render-view (context result)
   "Render Pull Request detail RESULT in CONTEXT."
@@ -454,7 +467,9 @@
               (gh-ui--section (inline-comment
                                (alist-get 'id comment) resource nil)
                 (gh-ui--row
-                 "Inline comment by"
+                 (concat
+                  (gh-ui--styled "Inline comment" 'gh-conversation-kind)
+                  " by")
                  (gh-ui--styled
                   (gh-core--name (alist-get 'user comment))
                   'gh-author)
@@ -488,8 +503,7 @@
      (lambda ()
        (setq gh-pr--view-number number
              gh-buffer-dispatch-function #'gh-pr-dispatch)
-       (local-set-key (kbd "c") #'gh-pr-review-comment-add)
-       (local-set-key (kbd "C") #'gh-pr-file-comment-add)))))
+       (local-set-key (kbd "v") #'gh-pr-review)))))
 
 ;;;###autoload
 (defun gh-pr-diff (&optional context number)
@@ -668,24 +682,14 @@ CALLBACK receives template text, or an empty string when no template exists."
          context number (lambda (data) (gh-pr--open-edit-editor context number data))
          #'gh-core--user-error)))))
 
-;;; Review collection
-
-(defun gh-pr--review-key (context number)
-  "Return review collection key for CONTEXT and NUMBER."
-  (list (gh-context-host context) (gh-context-repository context) number))
-
-(defun gh-pr--collect-review-comment (context number comment)
-  "Store COMMENT for Pull Request NUMBER in CONTEXT."
-  (let ((key (gh-pr--review-key context number)))
-    (puthash key (append (gethash key gh-pr--review-comments) (list comment))
-             gh-pr--review-comments)
-    (message "Collected review comment (%d total)"
-             (length (gethash key gh-pr--review-comments)))))
+;;; Review entry and compatibility commands
 
 (defun gh-pr-review-comment-add
     (path line body &optional start-line side context number)
-  "Collect a review comment BODY at PATH and LINE.
-START-LINE makes a multi-line comment; SIDE defaults to RIGHT."
+  "Compatibility wrapper collecting BODY at PATH and LINE.
+START-LINE makes a multi-line comment; SIDE defaults to RIGHT.  CONTEXT and
+NUMBER are retained for call compatibility; collection occurs in the active
+Commit Review page."
   (interactive
    (let* ((resource (gh-ui-resource-at-point))
           (path (or (plist-get resource :path) (read-string "Path: ")))
@@ -693,52 +697,36 @@ START-LINE makes a multi-line comment; SIDE defaults to RIGHT."
           (start (read-number "Start line (same for one line): " line))
           (body (read-string "Review comment: ")))
      (list path line body (unless (= start line) start) "RIGHT")))
-  (pcase-let ((`(,current-context ,current-number) (gh-pr--current)))
-    (setq context (gh-pr--context (or context current-context))
-          number (or number current-number))
-    (let ((comment (list :path path :line line :side (or side "RIGHT")
-                         :subject-type "LINE"
-                          :body body)))
-      (when start-line
-        (setq comment (plist-put comment :start-line start-line)
-              comment (plist-put comment :start-side (or side "RIGHT"))))
-      (gh-pr--collect-review-comment context number comment))))
+  (ignore context number)
+  (unless (eq gh-buffer-resource-kind 'commit-review)
+    (user-error "Open the Pull Request Commit Review page before collecting comments"))
+  (let ((comment (list :path path :line line :side (or side "RIGHT")
+                       :subject-type "LINE" :body body)))
+    (when start-line
+      (setq comment (plist-put comment :start-line start-line)
+            comment (plist-put comment :start-side (or side "RIGHT"))))
+    (gh-commit--add-review-draft comment)))
 
 (defun gh-pr-file-comment-add (path body &optional context number)
-  "Collect whole-file review comment BODY for PATH."
+  "Compatibility wrapper collecting whole-file review BODY for PATH."
   (interactive
    (let ((resource (gh-ui-resource-at-point)))
      (list (or (plist-get resource :path) (read-string "Path: "))
            (read-string "File review comment: "))))
-  (pcase-let ((`(,current-context ,current-number) (gh-pr--current)))
-    (setq context (gh-pr--context (or context current-context))
-          number (or number current-number))
-    (gh-pr--collect-review-comment
-     context number (list :path path :subject-type "FILE" :body body))))
+  (ignore context number)
+  (unless (eq gh-buffer-resource-kind 'commit-review)
+    (user-error "Open the Pull Request Commit Review page before collecting comments"))
+  (gh-commit--add-review-draft
+   (list :path path :subject-type "FILE" :body body)))
 
 ;;;###autoload
 (defun gh-pr-review-submit-collected (&optional context number)
-  "Submit collected review comments for Pull Request NUMBER."
+  "Compatibility wrapper submitting drafts from the Commit Review page."
   (interactive)
-  (pcase-let ((`(,current-context ,current-number) (gh-pr--current)))
-    (setq context (gh-pr--context (or context current-context))
-          number (or number current-number))
-    (let* ((key (gh-pr--review-key context number))
-           (comments (gethash key gh-pr--review-comments))
-           (event-name (completing-read
-                        "Review event: " '("COMMENT" "APPROVE" "REQUEST_CHANGES")
-                        nil t nil nil "COMMENT"))
-           (event (intern (downcase event-name)))
-           (body (read-string "Review summary (optional): ")))
-      (unless (or comments (not (string-empty-p body)))
-        (user-error "No collected comments or review summary"))
-      (gh-api--pr-review
-       context number event body comments
-       (lambda (_)
-         (remhash key gh-pr--review-comments)
-         (message "Review submitted")
-         (when (derived-mode-p 'gh-section-mode) (gh-ui-refresh t)))
-       #'gh-core--user-error))))
+  (ignore context number)
+  (unless (eq gh-buffer-resource-kind 'commit-review)
+    (user-error "Submit reviews from the Pull Request Commit Review page"))
+  (call-interactively #'gh-commit-review-submit))
 
 ;;; Actions
 
@@ -829,21 +817,13 @@ START-LINE makes a multi-line comment; SIDE defaults to RIGHT."
      #'gh-core--user-error)))
 
 (defun gh-pr-review (&optional context number)
-  "Submit a summary-only review for Pull Request NUMBER."
+  "Open the Commit Review page for the latest head of Pull Request NUMBER."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (gh-pr--current)))
     (setq context (gh-pr--context (or context current-context))
           number (or number current-number))
-    (let* ((event-name (completing-read
-                        "Review: " '("COMMENT" "APPROVE" "REQUEST_CHANGES")
-                        nil t))
-           (event (intern (downcase event-name)))
-           (body (read-string "Review body: ")))
-      (gh-api--pr-review
-       context number event body nil
-       (lambda (_) (message "Review submitted")
-         (when (derived-mode-p 'gh-section-mode) (gh-ui-refresh t)))
-       #'gh-core--user-error))))
+    (gh-resource-open
+     (gh-resource-create 'commit-review context :number number))))
 
 (defun gh-pr-merge (&optional context number)
   "Merge Pull Request NUMBER after prompting for strategy."
@@ -935,8 +915,7 @@ START-LINE makes a multi-line comment; SIDE defaults to RIGHT."
     ("F" "Changed files" gh-pr-view-files)
     ("C" "Commits" gh-pr-view-commits)]
    ["Review"
-    ("v" "Review" gh-pr-review)
-    ("V" "Submit collected" gh-pr-review-submit-collected)
+    ("v" "Review code" gh-pr-review)
     ("m" "Merge" gh-pr-merge)
     ("k" "Checkout" gh-pr-checkout)]
    ["State"

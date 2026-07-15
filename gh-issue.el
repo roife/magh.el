@@ -146,9 +146,11 @@
          (url (alist-get 'url comment))
          (resource (gh-resource-create 'comment context :id id :url url)))
     (gh-ui--section (comment id resource nil)
-      (format "Comment by %s · %s"
-              (propertize author 'font-lock-face 'gh-author)
-              (propertize created 'font-lock-face 'gh-date))
+      (concat (gh-ui--styled "Comment" 'gh-conversation-kind)
+              " by "
+              (gh-ui--styled author 'gh-author)
+              " · "
+              (gh-ui--styled created 'gh-date))
       (gh-ui--insert-markdown (alist-get 'body comment) context))))
 
 (defun gh-issue--render-view (context data)
