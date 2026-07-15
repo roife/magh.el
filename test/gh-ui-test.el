@@ -328,7 +328,7 @@
     (should (string-match-p "Recent commits\n" text))
     (should (string-match-p
              (regexp-quote
-              "No description.\n\nStatistics\n\nBranches\n")
+              "Description\nNo description.\n\nStatistics\n\nBranches\n")
              text))
     (should (string-match-p "aaaaaaaaaa Recent change Alice" text))
     (should (string-match-p
@@ -542,15 +542,7 @@
                     "  test\n12:35:01 test\n\nlint\n  setup\nplain line\n")))
     (should (eq (get-text-property 0 'font-lock-face text) 'gh-workflow))))
 
-(ert-deftest gh-ui-message-parts-promotes-summary-without-repeating-it ()
-  (should (equal (gh-ui--message-parts "Summary\n\nBody text")
-                 '("Summary" . "\nBody text")))
-  (should (equal (gh-ui--message-parts "Summary\r\n\r\nBody text")
-                 '("Summary" . "\nBody text")))
-  (should (equal (gh-ui--message-parts "" "No description.")
-                 '("No description."))))
-
-(ert-deftest gh-ui-description-renders-like-a-revision-message ()
+(ert-deftest gh-ui-description-has-an-explicit-heading ()
   (let* ((context (gh-context-from-repository "o/r"))
          (text
           (gh-test-render-page
@@ -559,8 +551,8 @@
            '((number . 1) (title . "Issue") (state . "OPEN")
              (body . "Summary\n\nBody text")))))
     (should (string-match-p "#1 Issue\n" text))
+    (should (string-match-p "Description\n" text))
     (should (string-match-p "Summary\n\nBody text\n" text))
-    (should-not (string-match-p "Description" text))
     (let ((position 0) (count 0))
       (while (string-match "Summary" text position)
         (setq count (1+ count) position (match-end 0)))
@@ -736,31 +728,38 @@
                           (created_at . "2026-07-02T00:00:00Z")
                           (body . "Looks good"))))
             (diff . "diff --git a/src/a.el b/src/a.el\n-old\n+new"))))
-    (should (string-match-p "Issue title"
-                            (gh-test-render-page
-                             'issue 7
-                             (lambda (data) (gh-issue--render-view context data))
-                             issue)))
-    (should (string-match-p "Checks (1)"
-                            (gh-test-render-page
-                             'pr 8
-                             (lambda (data) (gh-pr--render-view context data))
-                             pr)))
+    (let ((text (gh-test-render-page
+                 'issue 7
+                 (lambda (data) (gh-issue--render-view context data))
+                 issue)))
+      (should (string-match-p "Issue title" text))
+      (should (string-match-p "Description\nFixes #3\n" text))
+      (should (string-match-p "Comment by bob" text)))
+    (let ((text (gh-test-render-page
+                 'pr 8
+                 (lambda (data) (gh-pr--render-view context data))
+                 pr)))
+      (should (string-match-p "Checks (1)" text))
+      (should (string-match-p "Description\nPR body\n" text)))
     (should (string-match-p "checkout"
                             (gh-test-render-page
                              'run 42
                              (lambda (data) (gh-actions--render-run context data))
                              run)))
-    (should (string-match-p "asset.zip"
-                            (gh-test-render-page
-                             'release "v1.0"
-                             (lambda (data) (gh-release--render-view context data))
-                             release)))
-    (should (string-match-p "Changed files (1)"
-                            (gh-test-render-page
-                             'commit "aaaaaaaa"
-                             (lambda (data) (gh-commit--render-view context data))
-                             commit)))))
+    (let ((text (gh-test-render-page
+                 'release "v1.0"
+                 (lambda (data) (gh-release--render-view context data))
+                 release)))
+      (should (string-match-p "asset.zip" text))
+      (should (string-match-p "Release notes\nNotes\n" text)))
+    (let ((text (gh-test-render-page
+                 'commit "aaaaaaaa"
+                 (lambda (data) (gh-commit--render-view context data))
+                 commit)))
+      (should (string-match-p "Changed files (1)" text))
+      (should (string-match-p "Commit subject\n" text))
+      (should-not (string-match-p "Message\n" text))
+      (should (string-match-p "Comment by bob" text)))))
 
 (ert-deftest gh-magit-status-hook-only-starts-async-work-and-renders-loading ()
   (let ((context (gh-context-copy (gh-context-from-repository "o/r")

@@ -592,18 +592,6 @@ must use `font-lock-face' to survive just-in-time refontification."
       (gh-ui--linkify-references start end (or context gh-buffer-context))
       (gh-ui--load-inline-images start end))))
 
-(defun gh-ui--message-parts (text &optional fallback)
-  "Return TEXT as a Magit-style (SUMMARY . BODY) pair.
-The first line becomes the section heading and is not repeated in BODY.
-FALLBACK supplies a summary when TEXT is empty."
-  (let* ((content (string-trim (gh-ui--normalize-newlines text)))
-         (content (if (string-empty-p content) (or fallback "") content))
-         (newline (string-match "\n" content))
-         (summary (if newline (substring content 0 newline) content))
-         (body (and newline (string-trim-right
-                             (substring content (1+ newline))))))
-    (cons summary (and body (not (string-empty-p body)) body))))
-
 (defun gh-ui--insert-diff (text)
   "Insert and fontify diff TEXT."
   (insert (gh-ui--fontified-string text 'diff-mode))

@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'gh-api)
 (require 'gh-candidate)
 (require 'gh-ui)
@@ -162,8 +163,14 @@
             (gh-ui--insert-header "Updated"
                                   (gh-core--date (alist-get 'updatedAt repo))
                                   'gh-date)
-            (gh-ui--insert-markdown
-             (or (alist-get 'description repo) "") context)))))))
+            (gh-ui--section (description 'description resource nil)
+              "Description"
+              (let ((description (alist-get 'description repo)))
+                (gh-ui--insert-markdown
+                 (if (string-empty-p (string-trim (or description "")))
+                     "No description."
+                   description)
+                 context)))))))))
 
 (defun gh-pages--setup-user-status ()
   "Install User Status bindings."

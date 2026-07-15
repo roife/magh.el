@@ -299,12 +299,14 @@
                           (gh-core--names (alist-get 'labels pr))
                           'gh-label)
     (insert "\n")
-    (pcase-let ((`(,summary . ,body)
-                 (gh-ui--message-parts (alist-get 'body pr)
-                                       "No description.")))
-      (gh-ui--section (description 'description resource nil)
-        (gh-ui--styled summary 'magit-diff-revision-summary)
-        (when body (gh-ui--insert-markdown body context))))
+    (gh-ui--section (description 'description resource nil)
+      "Description"
+      (let ((body (alist-get 'body pr)))
+        (gh-ui--insert-markdown
+         (if (string-empty-p (string-trim (or body "")))
+             "No description."
+           body)
+         context)))
     (gh-ui--section (commits 'commits
                              (gh-resource-create 'pr-commits context
                                                  :number number) nil)

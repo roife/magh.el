@@ -158,12 +158,19 @@
         (gh-ui--insert-header "Parent" (alist-get 'sha parent)
                               'gh-hash parent-resource)))
     (insert "\n")
-    (pcase-let ((`(,summary . ,body)
-                 (gh-ui--message-parts (alist-get 'message commit)
-                                       "(no message)")))
+    (let* ((message (string-trim
+                     (gh-ui--normalize-newlines
+                      (alist-get 'message commit))))
+           (message (if (string-empty-p message) "(no message)" message))
+           (newline (string-match "\n" message))
+           (summary (if newline (substring message 0 newline) message))
+           (body (and newline (string-trim-right
+                               (substring message (1+ newline))))))
       (gh-ui--section (message 'message resource nil)
         (gh-ui--styled summary 'magit-diff-revision-summary)
-        (when body (gh-ui--insert-markdown body context))))
+        (unless (string-empty-p (or body ""))
+          (insert body)
+          (unless (bolp) (insert "\n")))))
     (gh-ui--section (changed-files 'changed-files nil nil)
       (format "Changed files (%d)" (length files))
       (dolist (file files)
@@ -190,6 +197,7 @@
       (dolist (comment comments)
         (gh-ui--section (comment (alist-get 'id comment) nil nil)
           (gh-ui--row
+           "Comment by"
            (gh-ui--styled (gh-core--name (alist-get 'user comment)) 'gh-author)
            (gh-ui--styled (gh-core--date (alist-get 'created_at comment))
                           'gh-date))

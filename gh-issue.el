@@ -146,7 +146,7 @@
          (url (alist-get 'url comment))
          (resource (gh-resource-create 'comment context :id id :url url)))
     (gh-ui--section (comment id resource nil)
-      (format "%s · %s"
+      (format "Comment by %s · %s"
               (propertize author 'font-lock-face 'gh-author)
               (propertize created 'font-lock-face 'gh-date))
       (gh-ui--insert-markdown (alist-get 'body comment) context))))
@@ -180,12 +180,14 @@
                      (gh-core--date (alist-get 'updatedAt data)))
      'gh-date)
     (insert "\n")
-    (pcase-let ((`(,summary . ,body)
-                 (gh-ui--message-parts (alist-get 'body data)
-                                       "No description.")))
-      (gh-ui--section (description 'description resource nil)
-        (gh-ui--styled summary 'magit-diff-revision-summary)
-        (when body (gh-ui--insert-markdown body context))))
+    (gh-ui--section (description 'description resource nil)
+      "Description"
+      (let ((body (alist-get 'body data)))
+        (gh-ui--insert-markdown
+         (if (string-empty-p (string-trim (or body "")))
+             "No description."
+           body)
+         context)))
     (dolist (comment (alist-get 'comments data))
       (gh-issue--render-comment context comment))
     (when-let* ((closing-prs

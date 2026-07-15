@@ -308,12 +308,14 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
     (gh-ui--insert-header "Branch" current-ref 'gh-branch)
     (gh-ui--insert-header "Stats" (gh-repo--stats repo viewer-forked))
     (insert "\n")
-    (pcase-let ((`(,summary . ,body)
-                 (gh-ui--message-parts (alist-get 'description repo)
-                                       "No description.")))
-      (gh-ui--section (description 'description repo-resource nil)
-        (gh-ui--styled summary 'magit-diff-revision-summary)
-        (when body (gh-ui--insert-markdown body context))))
+    (gh-ui--section (description 'description repo-resource nil)
+      "Description"
+      (let ((description (alist-get 'description repo)))
+        (gh-ui--insert-markdown
+         (if (string-empty-p (string-trim (or description "")))
+             "No description."
+           description)
+         context)))
     (gh-ui--section (statistics 'statistics
                                 (gh-resource-create 'statistics context) t)
       "Statistics"

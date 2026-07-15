@@ -107,12 +107,14 @@
                           (gh-core--date (alist-get 'publishedAt data))
                           'gh-date)
     (insert "\n")
-    (pcase-let ((`(,summary . ,body)
-                 (gh-ui--message-parts (alist-get 'body data)
-                                       "No release notes.")))
-      (gh-ui--section (description 'description resource nil)
-        (gh-ui--styled summary 'magit-diff-revision-summary)
-        (when body (gh-ui--insert-markdown body context))))
+    (gh-ui--section (description 'description resource nil)
+      "Release notes"
+      (let ((body (alist-get 'body data)))
+        (gh-ui--insert-markdown
+         (if (string-empty-p (string-trim (or body "")))
+             "No release notes."
+           body)
+         context)))
     (let ((assets (alist-get 'assets data)))
       (gh-ui--section (assets 'assets nil nil)
         (format "Assets (%d)" (length assets))
