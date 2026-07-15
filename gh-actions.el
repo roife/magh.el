@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -13,16 +13,12 @@
 
 ;;; Code:
 
-(require 'base64)
-(require 'cl-lib)
-(require 'seq)
 (require 'subr-x)
 (require 'transient)
 (require 'gh-api)
 (require 'gh-candidate)
 (require 'gh-ui)
 
-(defvar-local gh-actions--params nil)
 (defvar-local gh-actions--dispatch-resource nil)
 (defvar-local gh-actions--run-id nil)
 (defvar-local gh-actions--workflow-id nil)
@@ -33,21 +29,15 @@
 
 (defun gh-actions--run-resource (context data)
   "Create Run resource from DATA."
-  (let ((id (or (gh-core--alist-get 'databaseId data)
-                (gh-core--alist-get 'id data))))
-    (gh-resource-create
-     'run context :id id
-     :title (or (gh-core--alist-get 'displayTitle data)
-                (gh-core--alist-get 'name data))
-     :url (or (gh-core--alist-get 'url data)
-              (gh-context-web-url context (format "actions/runs/%s" id)))
-     :workflow-id (gh-core--alist-get 'workflowDatabaseId data)
-     :data data)))
+  (gh-resource-create
+   'run context :id (alist-get 'databaseId data)
+   :title (alist-get 'displayTitle data)
+   :url (alist-get 'url data)))
 
 (defun gh-actions--run-state (data)
   "Return display state for Run DATA."
-  (or (gh-core--alist-get 'conclusion data)
-      (gh-core--alist-get 'status data) ""))
+  (or (alist-get 'conclusion data)
+      (alist-get 'status data)))
 
 (defun gh-actions--insert-run (context data &optional workflow-page)
   "Insert Run DATA in CONTEXT.
@@ -55,11 +45,11 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
   (let* ((resource (gh-actions--run-resource context data))
          (id (plist-get resource :id))
          (state (gh-actions--run-state data))
-         (title (or (gh-core--alist-get 'displayTitle data) ""))
-         (workflow (or (gh-core--alist-get 'workflowName data)
-                       (gh-core--alist-get 'name data) ""))
-         (branch (gh-core--alist-get 'headBranch data))
-         (created (gh-core--date (gh-core--alist-get 'createdAt data))))
+         (title (alist-get 'displayTitle data))
+         (workflow (or (alist-get 'workflowName data)
+                       (alist-get 'name data)))
+         (branch (alist-get 'headBranch data))
+         (created (gh-core--date (alist-get 'createdAt data))))
     (gh-ui--section (run id resource t)
       (gh-ui--row
        (gh-ui--styled (upcase state) (gh-core--state-face state))
@@ -70,10 +60,10 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
        (and (not workflow-page) (gh-ui--styled created 'gh-date)))
       (unless workflow-page
         (gh-ui--insert-header "Branch" branch 'gh-branch))
-      (gh-ui--insert-header "Event" (gh-core--alist-get 'event data))
+      (gh-ui--insert-header "Event" (alist-get 'event data))
       (when workflow-page
         (gh-ui--insert-header "Created" created 'gh-date))
-      (gh-ui--insert-header "Commit" (gh-core--alist-get 'headSha data)
+      (gh-ui--insert-header "Commit" (alist-get 'headSha data)
                             'gh-hash))))
 
 (defun gh-actions--render-list (context data)
@@ -87,60 +77,51 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
     (insert (propertize "No matching workflow runs.\n"
                         'font-lock-face 'shadow))))
 
-(defun gh-actions--setup-list (context)
-  "Install Actions list keys for CONTEXT."
-  (local-set-key (kbd "W") (lambda () (interactive) (gh-workflow-list context)))
-  (setq gh-buffer-dispatch-function #'gh-actions-dispatch))
-
 ;;;###autoload
 (defun gh-run-list (&optional context params)
   "Open recent workflow runs in CONTEXT filtered by PARAMS."
   (interactive)
-  (setq context (gh-actions--context context)
-        params (copy-sequence params))
+  (setq context (gh-actions--context context))
   (gh-ui--open-page
    (format "*gh: %s · Actions*" (gh-context-repository context))
    context 'run-list (gh-context-repository context)
    (lambda (success error force)
      (gh-api--run-list context params success error force))
    (lambda (data) (gh-actions--render-list context data))
-   :setup (lambda ()
-            (setq gh-actions--params params)
-            (gh-actions--setup-list context))))
-
-(defalias 'gh-actions #'gh-run-list)
+   :setup
+   (lambda ()
+     (local-set-key (kbd "W")
+                    (lambda () (interactive) (gh-workflow-list context)))
+     (setq gh-buffer-dispatch-function #'gh-actions-dispatch))))
 
 ;;; Run details
 
 (defun gh-actions--job-resource (context run-id job)
   "Create a Job resource for JOB in RUN-ID."
   (gh-resource-create
-   'job context :id (or (gh-core--alist-get 'databaseId job)
-                        (gh-core--alist-get 'id job))
-   :run-id run-id :title (gh-core--alist-get 'name job)
-   :url (gh-core--alist-get 'url job) :data job))
+   'job context :id (alist-get 'databaseId job)
+   :run-id run-id :title (alist-get 'name job)
+   :url (alist-get 'url job)))
 
 (defun gh-actions--render-job (context run-id job)
   "Render JOB for RUN-ID."
   (let* ((resource (gh-actions--job-resource context run-id job))
          (id (plist-get resource :id))
-         (state (or (gh-core--alist-get 'conclusion job)
-                    (gh-core--alist-get 'status job) "")))
+         (state (or (alist-get 'conclusion job)
+                    (alist-get 'status job))))
     (gh-ui--section (job id resource nil)
       (gh-ui--row
        (gh-ui--styled (upcase state) (gh-core--state-face state))
-       (gh-ui--styled (or (gh-core--alist-get 'name job) "job")
+       (gh-ui--styled (alist-get 'name job)
                       'gh-resource-title))
-      (dolist (step (gh-core--alist-get 'steps job))
-        (let ((step-state (or (gh-core--alist-get 'conclusion step)
-                              (gh-core--alist-get 'status step) "")))
-          (gh-ui--section (step (or (gh-core--alist-get 'number step)
-                                    (gh-core--alist-get 'name step))
-                                resource t)
+      (dolist (step (alist-get 'steps job))
+        (let ((step-state (or (alist-get 'conclusion step)
+                              (alist-get 'status step))))
+          (gh-ui--section (step (alist-get 'number step) resource t)
             (gh-ui--row
              (gh-ui--styled (upcase step-state)
                             (gh-core--state-face step-state))
-             (gh-ui--styled (or (gh-core--alist-get 'name step) "step")
+             (gh-ui--styled (alist-get 'name step)
                             'gh-resource-title))))))))
 
 (defun gh-actions--render-run (context data)
@@ -151,36 +132,36 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
          (workflow-resource
           (gh-resource-create
            'workflow context
-           :id (gh-core--alist-get 'workflowDatabaseId data)
-           :title (or (gh-core--alist-get 'workflowName data)
-                      (gh-core--alist-get 'name data)))))
+           :id (alist-get 'workflowDatabaseId data)
+           :title (or (alist-get 'workflowName data)
+                      (alist-get 'name data)))))
     (insert (propertize (upcase state)
                         'font-lock-face (gh-core--state-face state)) " "
-            (propertize (or (gh-core--alist-get 'displayTitle data) "")
+            (propertize (alist-get 'displayTitle data)
                         'font-lock-face 'gh-resource-title) "\n")
     (add-text-properties (line-beginning-position 0) (point)
                          (list 'gh-resource resource))
     (gh-ui--insert-header "Workflow"
-                          (or (gh-core--alist-get 'workflowName data)
-                              (gh-core--alist-get 'name data))
+                          (or (alist-get 'workflowName data)
+                              (alist-get 'name data))
                           'gh-workflow workflow-resource)
-    (gh-ui--insert-header "Status" (gh-core--alist-get 'status data)
+    (gh-ui--insert-header "Status" (alist-get 'status data)
                           (gh-core--state-face
-                           (gh-core--alist-get 'status data)))
-    (gh-ui--insert-header "Conclusion" (gh-core--alist-get 'conclusion data)
+                           (alist-get 'status data)))
+    (gh-ui--insert-header "Conclusion" (alist-get 'conclusion data)
                           (gh-core--state-face state))
-    (gh-ui--insert-header "Branch" (gh-core--alist-get 'headBranch data)
+    (gh-ui--insert-header "Branch" (alist-get 'headBranch data)
                           'gh-branch
                           (gh-resource-create
                            'tree (gh-context-copy
-                                  context :ref (gh-core--alist-get 'headBranch data))
-                           :ref (gh-core--alist-get 'headBranch data) :path ""))
-    (gh-ui--insert-header "Commit" (gh-core--alist-get 'headSha data) 'gh-hash
+                                  context :ref (alist-get 'headBranch data))
+                           :ref (alist-get 'headBranch data) :path ""))
+    (gh-ui--insert-header "Commit" (alist-get 'headSha data) 'gh-hash
                           (gh-resource-create
-                           'commit context :sha (gh-core--alist-get 'headSha data)))
-    (gh-ui--insert-header "Event" (gh-core--alist-get 'event data))
+                           'commit context :sha (alist-get 'headSha data)))
+    (gh-ui--insert-header "Event" (alist-get 'event data))
     (insert "\n")
-    (dolist (job (gh-core--alist-get 'jobs data))
+    (dolist (job (alist-get 'jobs data))
       (gh-actions--render-job context id job))))
 
 (defun gh-actions--setup-run (context id)
@@ -211,13 +192,12 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
 
 ;;; Logs and watch
 
-(defun gh-actions--text-buffer (name mode)
-  "Create a read-only text buffer NAME in MODE."
+(defun gh-actions--text-buffer (name)
+  "Create a read-only text buffer NAME."
   (let ((buffer (get-buffer-create name)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t)) (erase-buffer))
-      (funcall mode)
-      (setq buffer-read-only t))
+      (special-mode))
     buffer))
 
 (defun gh-run-log (&optional context id job-id)
@@ -225,11 +205,10 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
   (interactive)
   (setq context (gh-actions--context context)
         id (or id gh-actions--run-id
-               (plist-get (gh-ui-resource-at-point) :run-id)))
+               (plist-get gh-actions--dispatch-resource :id)))
   (let ((buffer (gh-actions--text-buffer
                  (format "*gh: %s · Run %s Log*"
-                         (gh-context-repository context) id)
-                 #'special-mode)))
+                         (gh-context-repository context) id))))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (insert (propertize "Loading Actions log…\n"
@@ -250,11 +229,11 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
   "Watch Run ID without blocking Emacs."
   (interactive)
   (setq context (gh-actions--context context)
-        id (or id gh-actions--run-id))
+        id (or id gh-actions--run-id
+               (plist-get gh-actions--dispatch-resource :id)))
   (let ((buffer (gh-actions--text-buffer
                  (format "*gh: %s · Watch Run %s*"
-                         (gh-context-repository context) id)
-                 #'special-mode)))
+                         (gh-context-repository context) id))))
     (with-current-buffer buffer
       (gh-api--run-watch
        context id
@@ -280,13 +259,11 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
 
 (defun gh-actions--workflow-resource (context data)
   "Create Workflow resource from DATA."
-  (let ((id (gh-core--alist-get 'id data)))
-    (gh-resource-create
-     'workflow context :id id :name (gh-core--alist-get 'name data)
-     :title (gh-core--alist-get 'name data) :path (gh-core--alist-get 'path data)
-     :url (or (gh-core--alist-get 'html_url data)
-              (gh-context-web-url context (format "actions/workflows/%s" id)))
-     :data data)))
+  (gh-resource-create
+   'workflow context :id (alist-get 'id data)
+   :title (alist-get 'name data) :path (alist-get 'path data)
+   :url (alist-get 'html_url data)
+   :data data))
 
 ;;;###autoload
 (defun gh-workflow-list (&optional context)
@@ -296,23 +273,18 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
   (gh-api--workflow-list
    context
    (lambda (items)
-     (let* ((resources (mapcar (lambda (item)
-                                 (gh-actions--workflow-resource context item))
-                               items))
-            (resource
-             (gh-candidate-read
-              "Workflow: " resources :category 'gh-workflow :preview t
-              :formatter
-              (lambda (item)
-                (let ((data (plist-get item :data)))
-                  (gh-ui--row
-                   (gh-ui--styled
-                    (upcase (or (gh-core--alist-get 'state data) ""))
-                    (gh-core--state-face
-                     (gh-core--alist-get 'state data)))
-                   (gh-ui--styled (gh-resource-title item) 'gh-workflow)
-                   (gh-ui--styled (plist-get item :path) 'gh-file)))))))
-       (when resource (gh-resource-open resource))))
+     (gh-candidate-select-and-open
+      "Workflow: "
+      (mapcar (lambda (item) (gh-actions--workflow-resource context item))
+              items)
+      (lambda (item)
+        (let ((data (plist-get item :data)))
+          (gh-ui--row
+           (gh-ui--styled (upcase (alist-get 'state data))
+                          (gh-core--state-face (alist-get 'state data)))
+           (gh-ui--styled (gh-resource-title item) 'gh-workflow)
+           (gh-ui--styled (plist-get item :path) 'gh-file))))
+      t))
    #'gh-core--user-error))
 
 (defun gh-actions--fetch-workflow
@@ -321,7 +293,7 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
   (gh-api--workflow-get
    context workflow
    (lambda (metadata)
-     (let ((path (gh-core--alist-get 'path metadata)))
+     (let ((path (alist-get 'path metadata)))
        (gh-core--collect-async
         (list
          (cons 'metadata (lambda (ok _fail) (funcall ok metadata)))
@@ -334,28 +306,20 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
         success error)))
    error force))
 
-(defun gh-actions--decode-yaml (content)
-  "Decode workflow CONTENT JSON into text."
-  (decode-coding-string
-   (base64-decode-string
-    (replace-regexp-in-string
-     "\n" "" (or (gh-core--alist-get 'content content) "")))
-   'utf-8))
-
 (defun gh-actions--render-workflow (context _workflow ref result)
   "Render workflow RESULT in CONTEXT at REF."
   (let* ((metadata (alist-get 'metadata result))
          (configuration (alist-get 'configuration result))
          (runs (alist-get 'runs result))
          (resource (gh-actions--workflow-resource context metadata))
-         (path (gh-core--alist-get 'path metadata)))
+         (path (alist-get 'path metadata)))
     (gh-ui--insert-header "Repository" (gh-context-repository context)
                           'gh-repository)
-    (gh-ui--insert-header "Workflow" (gh-core--alist-get 'name metadata)
+    (gh-ui--insert-header "Workflow" (alist-get 'name metadata)
                           'gh-workflow resource)
-    (gh-ui--insert-header "State" (gh-core--alist-get 'state metadata)
+    (gh-ui--insert-header "State" (alist-get 'state metadata)
                           (gh-core--state-face
-                           (gh-core--alist-get 'state metadata)))
+                           (alist-get 'state metadata)))
     (gh-ui--insert-header
      "Path" path 'gh-file
      (gh-resource-create 'file (gh-context-copy context :ref ref :path path)
@@ -367,11 +331,8 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
     (insert "\n")
     (gh-ui--section (configuration 'configuration nil nil)
       "Configuration"
-      (let ((start (point)))
-        (insert (gh-actions--decode-yaml configuration))
-        (unless (bolp) (insert "\n"))
-        (when (fboundp 'yaml-mode)
-          (add-text-properties start (point) '(font-lock-face default)))))
+      (insert (gh-api--decode-content configuration))
+      (unless (bolp) (insert "\n")))
     (gh-ui--section (runs 'recent-runs nil nil)
       (format "Recent runs (%d)" (length runs))
       (dolist (run runs) (gh-actions--insert-run context run t)))))
@@ -421,14 +382,13 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
                                   (plist-get resource :id)))))
     (unless job-id
       (let* ((run (and (eq gh-buffer-resource-kind 'run) gh-ui--data))
-             (jobs (and run (gh-core--alist-get 'jobs run)))
+             (jobs (and run (alist-get 'jobs run)))
              (choices (mapcar (lambda (job)
-                                (cons (gh-core--alist-get 'name job) job)) jobs))
+                                (cons (alist-get 'name job) job)) jobs))
              (choice (and choices
                           (completing-read "Job: " choices nil t)))
              (job (and choice (cdr (assoc choice choices)))))
-        (setq job-id (and job (or (gh-core--alist-get 'databaseId job)
-                                  (gh-core--alist-get 'id job))))))
+        (setq job-id (and job (alist-get 'databaseId job)))))
     (unless job-id (user-error "No job selected"))
     (gh-api--run-rerun-job
      context job-id
@@ -521,18 +481,13 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
 (gh-candidate-register
  'workflow
  :open (lambda (resource)
-         (gh-workflow-view (or (plist-get resource :id)
-                               (plist-get resource :path)
-                               (plist-get resource :name))
+         (gh-workflow-view (plist-get resource :id)
                            (plist-get resource :context)))
  :preview (lambda (resource)
-            (gh-workflow-view (or (plist-get resource :id)
-                                  (plist-get resource :path)
-                                  (plist-get resource :name))
+            (gh-workflow-view (plist-get resource :id)
                               (plist-get resource :context) nil t))
  :dispatch (lambda (resource)
-             (setq gh-actions--workflow-id
-                   (or (plist-get resource :id) (plist-get resource :path)))
+             (setq gh-actions--workflow-id (plist-get resource :id))
              (call-interactively #'gh-workflow-dispatch)))
 
 (gh-candidate-register

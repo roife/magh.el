@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (consult "2.0") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (consult "2.0") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -14,54 +14,11 @@
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'subr-x)
 (require 'transient)
 (require 'url-util)
 (require 'gh-api)
 (require 'gh-candidate)
 (require 'gh-ui)
-
-(defun gh-notify--context (base data)
-  "Build notification repository context from DATA and BASE."
-  (let* ((repository (gh-core--alist-get 'repository data))
-         (name (or (gh-core--alist-get 'full_name repository)
-                   (gh-core--alist-get 'nameWithOwner repository))))
-    (if name
-        (gh-context-from-repository name (and base (gh-context-host base)))
-      base)))
-
-(defun gh-notify--subject-resource (context data)
-  "Convert notification DATA subject to a native resource."
-  (let* ((subject (gh-core--alist-get 'subject data))
-         (type (gh-core--alist-get 'type subject))
-         (title (gh-core--alist-get 'title subject))
-         (api-url (gh-core--alist-get 'url subject)))
-    (cond
-     ((and (string= type "PullRequest")
-           (string-match "/pulls/\\([0-9]+\\)" (or api-url "")))
-      (gh-resource-create 'pr context
-                          :number (string-to-number (match-string 1 api-url))
-                          :title title))
-     ((and (string= type "Issue")
-           (string-match "/issues/\\([0-9]+\\)" (or api-url "")))
-      (gh-resource-create 'issue context
-                          :number (string-to-number (match-string 1 api-url))
-                          :title title))
-     ((and (member type '("Commit" "CommitComment"))
-           (string-match "/commits/\\([[:xdigit:]]+\\)" (or api-url "")))
-      (gh-resource-create 'commit context :sha (match-string 1 api-url)
-                          :title title))
-     ((and (member type '("WorkflowRun" "CheckSuite"))
-           (string-match "/actions/runs/\\([0-9]+\\)" (or api-url "")))
-      (gh-resource-create 'run context
-                          :id (string-to-number (match-string 1 api-url))
-                          :title title))
-     (t (gh-resource-create 'repository context :title title)))))
-
-(defun gh-notify--resource (base data)
-  "Create Notification resource from DATA using BASE context."
-  (gh-candidate--notification-resource base data))
 
 (defun gh-notify--format (resource)
   "Format Notification RESOURCE."
@@ -84,8 +41,7 @@
         ('reason (plist-get resource :reason))
         ('type (plist-get resource :subject-type))
         ('state (if (plist-get resource :unread) "Unread" "Read"))
-        ('date (substring (or (plist-get resource :updated) "") 0
-                          (min 10 (length (or (plist-get resource :updated) "")))))
+        ('date (substring (plist-get resource :updated) 0 10))
         (_ nil)))))
 
 ;;;###autoload
@@ -101,14 +57,16 @@ UNREAD-ONLY defaults to `gh-notifications-unread-only'."
      context unread-only
      (lambda (items)
        (let* ((resources (mapcar (lambda (item)
-                                   (gh-notify--resource context item)) items))
+                                   (gh-candidate--notification-resource
+                                    context item))
+                                 items))
               (resource
                (gh-candidate-read
                 (if unread-only "Unread notification: " "Notification: ")
                 resources :formatter #'gh-notify--format
                 :category 'gh-notification :preview t
                 :group #'gh-notify--group :sort nil)))
-         (when resource (gh-resource-open resource))))
+         (gh-resource-open resource)))
      #'gh-core--user-error)))
 
 (defun gh-notify--coerce (resource)
@@ -145,7 +103,7 @@ UNREAD-ONLY defaults to `gh-notifications-unread-only'."
   (interactive)
   (setq resource (gh-notify--coerce resource))
   (gh-api--notification-subscription
-   (plist-get resource :context) (plist-get resource :id) t nil
+   (plist-get resource :context) (plist-get resource :id) t
    (lambda (_) (message "Subscribed to notification thread"))
    #'gh-core--user-error))
 
@@ -154,7 +112,7 @@ UNREAD-ONLY defaults to `gh-notifications-unread-only'."
   (interactive)
   (setq resource (gh-notify--coerce resource))
   (gh-api--notification-subscription
-   (plist-get resource :context) (plist-get resource :id) nil nil
+   (plist-get resource :context) (plist-get resource :id) nil
    (lambda (_) (message "Unsubscribed from notification thread"))
    #'gh-core--user-error))
 

@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -15,6 +15,7 @@
 
 ;;; Code:
 
+(require 'base64)
 (require 'cl-lib)
 (require 'json)
 (require 'seq)
@@ -70,7 +71,7 @@
 (cl-defstruct (gh-api--operation
                (:constructor gh-api--operation-create))
   "A cancellable API operation composed of multiple asynchronous requests."
-  current cancelled finished (generation 0))
+  current cancelled finished)
 
 (defun gh-api--fields (fields)
   "Return comma-separated JSON FIELDS."
@@ -92,18 +93,12 @@
 
 (defun gh-api--operation-run (operation starter)
   "Run asynchronous STARTER as the current request of OPERATION.
-STARTER returns a `gh-client' request.  The generation guard handles test
-doubles and cache deliveries that invoke their callback immediately."
+STARTER returns a `gh-client' request."
   (unless (or (gh-api--operation-cancelled operation)
               (gh-api--operation-finished operation))
-    (let ((generation (1+ (gh-api--operation-generation operation))))
-      (setf (gh-api--operation-generation operation) generation)
-      (let ((request (funcall starter)))
-        (when (and (= generation (gh-api--operation-generation operation))
-                   (not (gh-api--operation-finished operation)))
-          (setf (gh-api--operation-current operation) request))
-        (when (and (gh-api--operation-cancelled operation) request)
-          (gh-client-cancel request)))))
+    (let ((request (funcall starter)))
+      (unless (gh-api--operation-finished operation)
+        (setf (gh-api--operation-current operation) request))))
   operation)
 
 (defun gh-api--repo-args (context)
@@ -121,15 +116,22 @@ doubles and cache deliveries that invoke their callback immediately."
 (defun gh-api--api-errors (data)
   "Return GraphQL/API errors from DATA, if present."
   (and (listp data)
-       (or (gh-core--alist-get 'errors data)
-           (and (gh-core--alist-get 'message data)
+       (or (alist-get 'errors data)
+           (and (alist-get 'message data)
                 ;; A successful endpoint can legitimately return a top-level
                 ;; `message' field.  REST error objects additionally carry one
                 ;; of these metadata fields; HTTP failures are also rejected by
                 ;; the transport before this predicate runs.
-                (or (gh-core--alist-get 'documentation_url data)
-                    (gh-core--alist-get 'status data))
-                (list (gh-core--alist-get 'message data))))))
+                (or (alist-get 'documentation_url data)
+                    (alist-get 'status data))
+                (list (alist-get 'message data))))))
+
+(defun gh-api--error (errors)
+  "Return a typed API condition for ERRORS."
+  (gh-core--error 'gh-api-error
+                  (format "GitHub API error: %s"
+                          (mapconcat #'gh-core--name errors "; "))
+                  errors))
 
 (cl-defun gh-api--read-json
     (context argv callback errback
@@ -140,26 +142,16 @@ Call CALLBACK with data, optionally processed by TRANSFORM."
    argv
    (lambda (data)
      (if-let* ((errors (gh-api--api-errors data)))
-         (funcall errback
-                  (gh-core--error 'gh-api-error
-                                  (format "GitHub API error: %s"
-                                          (mapconcat #'gh-core--name errors "; "))
-                                  errors))
-       (condition-case error
-           (funcall callback (if transform (funcall transform data) data))
-         (error
-          (funcall errback
-                   (gh-core--error 'gh-api-error
-                                   (error-message-string error)))))))
+         (funcall errback (gh-api--error errors))
+       (funcall callback (if transform (funcall transform data) data))))
    errback :context context :force force :domain domain :cache cache
    :json-false-object (and preserve-false :json-false) :stdin stdin))
 
 (cl-defun gh-api--read-text
-    (context argv callback errback &key force domain (cache t) stream)
+    (context argv callback errback &key force domain)
   "Asynchronously read text using ARGV in CONTEXT."
   (gh-client--text-async argv callback errback
-                         :context context :force force :domain domain
-                         :cache cache :stream stream))
+                         :context context :force force :domain domain))
 
 (defun gh-api--invalidate (domains)
   "Invalidate every cache domain in DOMAINS."
@@ -181,19 +173,14 @@ Call CALLBACK with data, optionally processed by TRANSFORM."
   (gh-client--mutate-json
    argv (lambda (result)
           (if-let* ((errors (gh-api--api-errors result)))
-              (funcall errback
-                       (gh-core--error
-                        'gh-api-error
-                        (format "GitHub API error: %s"
-                                (mapconcat #'gh-core--name errors "; "))
-                        errors))
+              (funcall errback (gh-api--error errors))
             (gh-api--invalidate domains)
             (funcall callback result)))
    errback :context context :stdin stdin))
 
 (defun gh-api--flag (flag value)
   "Return CLI FLAG and VALUE arguments, or nil if VALUE is nil."
-  (when (not (null value))
+  (when value
     (list flag (if (eq value :json-false) "false" (format "%s" value)))))
 
 (defun gh-api--true-p (value)
@@ -201,29 +188,34 @@ Call CALLBACK with data, optionally processed by TRANSFORM."
   (and value (not (eq value :json-false))))
 
 (defun gh-api--boolean-flag (flag value)
-  "Return a single boolean FLAG argument for VALUE, or nil when unspecified."
-  (when (not (null value))
-    (list (format "%s=%s" flag (if (gh-api--true-p value)
-                                    "true" "false")))))
+  "Return a single boolean FLAG argument for VALUE."
+  (list (format "%s=%s" flag (if (gh-api--true-p value)
+                                  "true" "false"))))
 
 (defun gh-api--repeated-flags (flag values)
   "Return repeated FLAG arguments for VALUES."
-  (cl-mapcan (lambda (value) (list flag (format "%s" value))) values))
+  (cl-mapcan (lambda (value) (list flag value)) values))
 
 (defun gh-api--flatten-pages (data)
   "Flatten `gh api --paginate --slurp' DATA."
-  (if (and (listp data) (listp (car data))
-           (or (null (car data)) (listp (caar data))))
-      (apply #'append data)
-    data))
+  (apply #'append data))
 
-(defun gh-api--rest-argv (endpoint &optional method fields paginate headers)
+(defun gh-api--decode-content (data)
+  "Decode GitHub Contents API DATA as UTF-8 text."
+  (let ((content (alist-get 'content data)))
+    (if (equal (alist-get 'encoding data) "base64")
+        (decode-coding-string
+         (base64-decode-string content)
+         'utf-8)
+      content)))
+
+(defun gh-api--rest-argv (endpoint method &optional fields paginate headers)
   "Build safe `gh api' argv for ENDPOINT.
-METHOD defaults to GET.  FIELDS is an alist of request fields.  PAGINATE adds
-`--paginate --slurp'.  HEADERS is a list of complete header strings."
-  (append (list "api" endpoint "--method" (or method "GET"))
+FIELDS is an alist of request fields.  PAGINATE adds `--paginate --slurp'.
+HEADERS is a list of complete header strings."
+  (append (list "api" endpoint "--method" method)
           (when paginate (list "--paginate" "--slurp"))
-          (cl-mapcan (lambda (header) (list "-H" header)) headers)
+          (gh-api--repeated-flags "-H" headers)
           (cl-mapcan
            (lambda (field)
              (let ((key (car field)) (value (cdr field)))
@@ -366,16 +358,13 @@ METHOD defaults to GET.  FIELDS is an alist of request fields.  PAGINATE adds
    (list "project" "list" "--owner" (gh-context-owner context)
          "--limit" (number-to-string gh-list-limit) "--format" "json")
    callback errback :force force
-   :transform (lambda (data)
-                (or (gh-core--alist-get 'projects data) data))
+   :transform (lambda (data) (alist-get 'projects data))
    :domain (gh-api--domain context 'project)))
 
 (defun gh-api--repo-create (context values callback errback)
   "Create a repository from VALUES plist."
   (setq context (gh-api--context context))
   (let ((name (plist-get values :name)))
-    (unless (and name (not (string-empty-p name)))
-      (signal 'gh-invalid-input (list "Repository name is required")))
     (gh-api--mutate-text
      context
      (append (list "repo" "create"
@@ -434,37 +423,31 @@ METHOD defaults to GET.  FIELDS is an alist of request fields.  PAGINATE adds
 (defun gh-api--repo-edit (context values callback errback)
   "Edit repository settings from VALUES plist."
   (setq context (gh-api--context context t))
-  (let ((argv (list "repo" "edit" (gh-context-repository context))))
-    (dolist (spec '((:default-branch "--default-branch")
-                    (:description "--description") (:homepage "--homepage")
-                    (:visibility "--visibility")))
-      (setq argv (append argv (gh-api--flag (cadr spec)
-                                            (plist-get values (car spec))))))
-    (dolist (spec '((:template "--template")
-                    (:issues "--enable-issues")
-                    (:projects "--enable-projects")
-                    (:discussions "--enable-discussions")
-                    (:wiki "--enable-wiki")
-                    (:merge-commit "--enable-merge-commit")
-                    (:squash-merge "--enable-squash-merge")
-                    (:rebase-merge "--enable-rebase-merge")
-                    (:delete-branch-on-merge "--delete-branch-on-merge")))
-      (when (plist-member values (car spec))
-        (setq argv
-              (append argv
-                      (list (format "%s=%s" (cadr spec)
-                                    (if (gh-api--true-p
-                                         (plist-get values (car spec)))
-                                        "true" "false")))))))
+  (gh-api--mutate-text
+   context
+   (append
+    (list "repo" "edit" (gh-context-repository context))
+    (cl-loop for (key flag) in
+             '((:default-branch "--default-branch")
+               (:description "--description") (:homepage "--homepage")
+               (:visibility "--visibility"))
+             append (gh-api--flag flag (plist-get values key)))
+    (cl-loop for (key flag) in
+             '((:template "--template") (:issues "--enable-issues")
+               (:projects "--enable-projects")
+               (:discussions "--enable-discussions")
+               (:wiki "--enable-wiki")
+               (:merge-commit "--enable-merge-commit")
+               (:squash-merge "--enable-squash-merge")
+               (:rebase-merge "--enable-rebase-merge")
+               (:delete-branch-on-merge "--delete-branch-on-merge"))
+             when (plist-member values key)
+             append (gh-api--boolean-flag flag (plist-get values key)))
     (when (plist-get values :visibility)
-      (setq argv (append argv '("--accept-visibility-change-consequences"))))
-    (setq argv (append argv
-                       (gh-api--repeated-flags "--add-topic"
-                                               (plist-get values :add-topics))
-                       (gh-api--repeated-flags "--remove-topic"
-                                               (plist-get values :remove-topics))))
-    (gh-api--mutate-text context argv (gh-api--domain context 'repository)
-                         callback errback)))
+      '("--accept-visibility-change-consequences"))
+    (gh-api--repeated-flags "--add-topic" (plist-get values :add-topics))
+    (gh-api--repeated-flags "--remove-topic" (plist-get values :remove-topics)))
+   (gh-api--domain context 'repository) callback errback))
 
 (defun gh-api--branch-create (context branch sha callback errback)
   "Create BRANCH at SHA in CONTEXT."
@@ -540,27 +523,28 @@ METHOD defaults to GET.  FIELDS is an alist of request fields.  PAGINATE adds
 (defun gh-api--issue-edit (context number values callback errback)
   "Edit Issue NUMBER using VALUES plist."
   (setq context (gh-api--context context t))
-  (let ((argv (append (list "issue" "edit" (number-to-string number))
-                      (gh-api--flag "--title" (plist-get values :title))
-                      (gh-api--flag "--milestone" (plist-get values :milestone))
-                      (gh-api--repeated-flags "--add-assignee"
-                                              (plist-get values :add-assignees))
-                      (gh-api--repeated-flags "--remove-assignee"
-                                              (plist-get values :remove-assignees))
-                      (gh-api--repeated-flags "--add-label"
-                                              (plist-get values :add-labels))
-                      (gh-api--repeated-flags "--remove-label"
-                                              (plist-get values :remove-labels))
-                      (gh-api--repeated-flags "--add-project"
-                                              (plist-get values :add-projects))
-                      (gh-api--repeated-flags "--remove-project"
-                                              (plist-get values :remove-projects)))))
-    (when (plist-member values :body)
-      (setq argv (append argv '("--body-file" "-"))))
-    (setq argv (append argv (gh-api--repo-args context)))
+  (let ((bodyp (plist-member values :body)))
     (gh-api--mutate-text
-     context argv (gh-api--domain context 'issue) callback errback
-     :stdin (and (plist-member values :body) (or (plist-get values :body) "")))))
+     context
+     (append (list "issue" "edit" (number-to-string number))
+             (gh-api--flag "--title" (plist-get values :title))
+             (gh-api--flag "--milestone" (plist-get values :milestone))
+             (gh-api--repeated-flags "--add-assignee"
+                                     (plist-get values :add-assignees))
+             (gh-api--repeated-flags "--remove-assignee"
+                                     (plist-get values :remove-assignees))
+             (gh-api--repeated-flags "--add-label"
+                                     (plist-get values :add-labels))
+             (gh-api--repeated-flags "--remove-label"
+                                     (plist-get values :remove-labels))
+             (gh-api--repeated-flags "--add-project"
+                                     (plist-get values :add-projects))
+             (gh-api--repeated-flags "--remove-project"
+                                     (plist-get values :remove-projects))
+             (when bodyp '("--body-file" "-"))
+             (gh-api--repo-args context))
+     (gh-api--domain context 'issue) callback errback
+     :stdin (and bodyp (or (plist-get values :body) "")))))
 
 (defun gh-api--issue-comment (context number body callback errback)
   "Comment BODY on Issue NUMBER."
@@ -725,33 +709,33 @@ METHOD defaults to GET.  FIELDS is an alist of request fields.  PAGINATE adds
 (defun gh-api--pr-edit (context number values callback errback)
   "Edit Pull Request NUMBER using VALUES plist."
   (setq context (gh-api--context context t))
-  (let ((argv
-         (append (list "pr" "edit" (number-to-string number))
-                 (gh-api--flag "--title" (plist-get values :title))
-                 (gh-api--flag "--base" (plist-get values :base))
-                 (gh-api--flag "--milestone" (plist-get values :milestone))
-                 (gh-api--repeated-flags "--add-reviewer"
-                                         (plist-get values :add-reviewers))
-                 (gh-api--repeated-flags "--remove-reviewer"
-                                         (plist-get values :remove-reviewers))
-                 (gh-api--repeated-flags "--add-assignee"
-                                         (plist-get values :add-assignees))
-                 (gh-api--repeated-flags "--remove-assignee"
-                                         (plist-get values :remove-assignees))
-                 (gh-api--repeated-flags "--add-label"
-                                         (plist-get values :add-labels))
-                 (gh-api--repeated-flags "--remove-label"
-                                         (plist-get values :remove-labels))
-                 (gh-api--repeated-flags "--add-project"
-                                         (plist-get values :add-projects))
-                 (gh-api--repeated-flags "--remove-project"
-                                         (plist-get values :remove-projects)))))
-    (when (plist-member values :body)
-      (setq argv (append argv '("--body-file" "-"))))
-    (setq argv (append argv (gh-api--repo-args context)))
+  (let ((bodyp (plist-member values :body)))
     (gh-api--mutate-text
-     context argv (gh-api--domain context 'pr) callback errback
-     :stdin (and (plist-member values :body) (or (plist-get values :body) "")))))
+     context
+     (append (list "pr" "edit" (number-to-string number))
+             (gh-api--flag "--title" (plist-get values :title))
+             (gh-api--flag "--base" (plist-get values :base))
+             (gh-api--flag "--milestone" (plist-get values :milestone))
+             (gh-api--repeated-flags "--add-reviewer"
+                                     (plist-get values :add-reviewers))
+             (gh-api--repeated-flags "--remove-reviewer"
+                                     (plist-get values :remove-reviewers))
+             (gh-api--repeated-flags "--add-assignee"
+                                     (plist-get values :add-assignees))
+             (gh-api--repeated-flags "--remove-assignee"
+                                     (plist-get values :remove-assignees))
+             (gh-api--repeated-flags "--add-label"
+                                     (plist-get values :add-labels))
+             (gh-api--repeated-flags "--remove-label"
+                                     (plist-get values :remove-labels))
+             (gh-api--repeated-flags "--add-project"
+                                     (plist-get values :add-projects))
+             (gh-api--repeated-flags "--remove-project"
+                                     (plist-get values :remove-projects))
+             (when bodyp '("--body-file" "-"))
+             (gh-api--repo-args context))
+     (gh-api--domain context 'pr) callback errback
+     :stdin (and bodyp (or (plist-get values :body) "")))))
 
 (defun gh-api--pr-comment (context number body callback errback)
   "Add BODY as a Pull Request NUMBER conversation comment."
@@ -849,7 +833,7 @@ METHOD defaults to GET.  FIELDS is an alist of request fields.  PAGINATE adds
 (defun gh-api--json-at (data &rest keys)
   "Return the value below KEYS in nested JSON alist DATA."
   (dolist (key keys data)
-    (setq data (and (listp data) (gh-core--alist-get key data)))))
+    (setq data (alist-get key data))))
 
 (defun gh-api--graphql-payload (query variables)
   "Serialize GraphQL QUERY and VARIABLES for `gh api --input -'."
@@ -884,32 +868,24 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
   (setq context (gh-api--context context t))
   (let* ((operation (gh-api--operation-create))
          (domain (gh-api--domain context 'pr))
-         (event-name (upcase (if (symbolp event) (symbol-name event)
-                               (format "%s" event))))
-         (body (or body ""))
+         (event-name (upcase (symbol-name event)))
          (graphql-argv '("api" "graphql" "--input" "-")))
-    (unless (member event-name '("COMMENT" "APPROVE" "REQUEST_CHANGES"))
-      (signal 'gh-invalid-input (list (format "Invalid review event: %s" event))))
     (dolist (comment comments)
-      (unless (and (stringp (plist-get comment :path))
-                   (not (string-empty-p (plist-get comment :path)))
-                   (stringp (plist-get comment :body))
-                   (not (string-empty-p (plist-get comment :body))))
+      (when (or (string-empty-p (plist-get comment :path))
+                (string-empty-p (plist-get comment :body)))
         (signal 'gh-invalid-input
                 (list "Every review comment requires a non-empty path and body"))))
     (cl-labels
         ((fail
           (error)
-          (unless (gh-api--operation-finished operation)
-            (setf (gh-api--operation-finished operation) t
-                  (gh-api--operation-current operation) nil)
-            (funcall errback error)))
+          (setf (gh-api--operation-finished operation) t
+                (gh-api--operation-current operation) nil)
+          (funcall errback error))
          (finish
           (result)
-          (unless (gh-api--operation-finished operation)
-            (setf (gh-api--operation-finished operation) t
-                  (gh-api--operation-current operation) nil)
-            (funcall callback result)))
+          (setf (gh-api--operation-finished operation) t
+                (gh-api--operation-current operation) nil)
+          (funcall callback result))
          (start
           (starter)
           (gh-api--operation-run operation starter))
@@ -994,10 +970,10 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
                           (seq-find
                            (lambda (review)
                              (gh-api--true-p
-                              (gh-core--alist-get 'viewerDidAuthor review)))
+                              (alist-get 'viewerDidAuthor review)))
                            nodes)))
                     (if-let* ((review-id
-                               (gh-core--alist-get 'id pending)))
+                               (alist-get 'id pending)))
                         (add-threads review-id comments nil)
                       (create-pending pull-request-id))))
                 #'fail :cache nil
@@ -1005,7 +981,7 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
                         query `((id . ,pull-request-id))))))))
          (begin
           (pr)
-          (if-let* ((pull-request-id (gh-core--alist-get 'id pr)))
+          (if-let* ((pull-request-id (alist-get 'id pr)))
               (find-pending pull-request-id)
             (fail
              (gh-core--error
@@ -1044,7 +1020,7 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
    context
    (append (list "run" "view" (format "%s" id)
                  "--json" (gh-api--fields
-                            (append gh-api--run-fields '(jobs))) )
+                            (append gh-api--run-fields '(jobs))))
            (gh-api--repo-args context))
    callback errback :force force :domain (gh-api--domain context 'run id)))
 
@@ -1058,13 +1034,13 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
            (gh-api--repo-args context))
    callback errback :force force :domain (gh-api--domain context 'run-log id)))
 
-(defun gh-api--run-watch (context id callback errback &optional chunk)
-  "Watch Run ID asynchronously, forwarding output to optional CHUNK."
+(defun gh-api--run-watch (context id callback errback chunk)
+  "Watch Run ID asynchronously, forwarding output to CHUNK."
   (setq context (gh-api--context context t))
   (gh-client--stream
    (append (list "run" "watch" (format "%s" id) "--exit-status")
            (gh-api--repo-args context))
-   (or chunk #'ignore) callback errback :context context))
+   chunk callback errback :context context))
 
 (defun gh-api--run-rerun (context id failed-only callback errback)
   "Rerun Run ID, restricted to failed jobs when FAILED-ONLY."
@@ -1118,9 +1094,7 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
 (defun gh-api--workflow-runs
     (context workflow ref callback errback &optional force)
   "Fetch recent runs for WORKFLOW, optionally restricted to REF."
-  (gh-api--run-list context
-                    (append (list :workflow (format "%s" workflow))
-                            (when ref (list :branch ref)))
+  (gh-api--run-list context (list :workflow (format "%s" workflow) :branch ref)
                     callback errback force))
 
 (defun gh-api--workflow-dispatch
@@ -1175,23 +1149,23 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
          (mapcar
           (lambda (asset)
             (append
-             `((downloadCount . ,(gh-core--alist-get 'download_count asset))
-               (url . ,(or (gh-core--alist-get 'browser_download_url asset)
-                           (gh-core--alist-get 'url asset))))
+             `((downloadCount . ,(alist-get 'download_count asset))
+               (url . ,(or (alist-get 'browser_download_url asset)
+                           (alist-get 'url asset))))
              asset))
-          (gh-core--alist-get 'assets data))))
+          (alist-get 'assets data))))
     (append
-     `((apiUrl . ,(gh-core--alist-get 'url data))
+     `((apiUrl . ,(alist-get 'url data))
        (assets . ,assets)
-       (createdAt . ,(gh-core--alist-get 'created_at data))
-       (databaseId . ,(gh-core--alist-get 'id data))
-       (isDraft . ,(gh-core--alist-get 'draft data))
-       (isPrerelease . ,(gh-core--alist-get 'prerelease data))
-       (name . ,(gh-core--alist-get 'name data))
-       (publishedAt . ,(gh-core--alist-get 'published_at data))
-       (tagName . ,(gh-core--alist-get 'tag_name data))
-       (targetCommitish . ,(gh-core--alist-get 'target_commitish data))
-       (url . ,(gh-core--alist-get 'html_url data)))
+       (createdAt . ,(alist-get 'created_at data))
+       (databaseId . ,(alist-get 'id data))
+       (isDraft . ,(alist-get 'draft data))
+       (isPrerelease . ,(alist-get 'prerelease data))
+       (name . ,(alist-get 'name data))
+       (publishedAt . ,(alist-get 'published_at data))
+       (tagName . ,(alist-get 'tag_name data))
+       (targetCommitish . ,(alist-get 'target_commitish data))
+       (url . ,(alist-get 'html_url data)))
      data)))
 
 (defun gh-api--release-get-id (context id callback errback &optional force)
@@ -1207,25 +1181,26 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
 (defun gh-api--release-create (context values callback errback)
   "Create a Release using VALUES plist."
   (setq context (gh-api--context context t))
-  (let ((generate (gh-api--true-p (plist-get values :generate-notes)))
-        (body (plist-get values :body)))
+  (let* ((generate (gh-api--true-p (plist-get values :generate-notes)))
+         (body (or (plist-get values :body) ""))
+         (send-body (or (not generate) (not (string-empty-p body)))))
     (gh-api--mutate-text
      context
      (append (list "release" "create" (plist-get values :tag))
-           (unless (and generate (string-empty-p (or body "")))
-             (list "--notes-file" "-"))
-           (gh-api--flag "--title" (plist-get values :title))
-           (gh-api--flag "--target" (plist-get values :target))
-           (gh-api--flag "--notes-start-tag" (plist-get values :notes-start-tag))
-           (when (gh-api--true-p (plist-get values :draft)) (list "--draft"))
-           (when (gh-api--true-p (plist-get values :prerelease))
-             (list "--prerelease"))
-           (when (gh-api--true-p (plist-get values :latest)) (list "--latest"))
-           (when generate (list "--generate-notes"))
-           (gh-api--repo-args context))
+             (when send-body (list "--notes-file" "-"))
+             (gh-api--flag "--title" (plist-get values :title))
+             (gh-api--flag "--target" (plist-get values :target))
+             (gh-api--flag "--notes-start-tag"
+                           (plist-get values :notes-start-tag))
+             (when (gh-api--true-p (plist-get values :draft)) (list "--draft"))
+             (when (gh-api--true-p (plist-get values :prerelease))
+               (list "--prerelease"))
+             (when (gh-api--true-p (plist-get values :latest))
+               (list "--latest"))
+             (when generate (list "--generate-notes"))
+             (gh-api--repo-args context))
      (gh-api--domain context 'release) callback errback
-     :stdin (unless (and generate (string-empty-p (or body "")))
-              (or body "")))))
+     :stdin (and send-body body))))
 
 (defun gh-api--release-generate-notes
     (context tag target previous-tag callback errback)
@@ -1243,28 +1218,24 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
 (defun gh-api--release-edit (context tag values callback errback)
   "Edit Release TAG using VALUES plist."
   (setq context (gh-api--context context t))
-  (let ((argv
-         (append (list "release" "edit" tag)
-                 (gh-api--flag "--tag" (plist-get values :tag))
-                 (gh-api--flag "--title" (plist-get values :title))
-                 (gh-api--flag "--target" (plist-get values :target))
-                 (when (plist-member values :draft)
-                   (list (format "--draft=%s"
-                                 (if (gh-api--true-p (plist-get values :draft))
-                                     "true" "false"))))
-                 (when (plist-member values :prerelease)
-                   (list (format "--prerelease=%s"
-                                 (if (gh-api--true-p
-                                      (plist-get values :prerelease))
-                                     "true" "false"))))
-                 (when (gh-api--true-p (plist-get values :latest))
-                   (list "--latest")))))
-    (when (plist-member values :body)
-      (setq argv (append argv '("--notes-file" "-"))))
-    (setq argv (append argv (gh-api--repo-args context)))
+  (let ((bodyp (plist-member values :body)))
     (gh-api--mutate-text
-     context argv (gh-api--domain context 'release) callback errback
-     :stdin (and (plist-member values :body) (or (plist-get values :body) "")))))
+     context
+     (append (list "release" "edit" tag)
+             (gh-api--flag "--tag" (plist-get values :tag))
+             (gh-api--flag "--title" (plist-get values :title))
+             (gh-api--flag "--target" (plist-get values :target))
+             (when (plist-member values :draft)
+               (gh-api--boolean-flag "--draft" (plist-get values :draft)))
+             (when (plist-member values :prerelease)
+               (gh-api--boolean-flag "--prerelease"
+                                     (plist-get values :prerelease)))
+             (when (gh-api--true-p (plist-get values :latest))
+               '("--latest"))
+             (when bodyp '("--notes-file" "-"))
+             (gh-api--repo-args context))
+     (gh-api--domain context 'release) callback errback
+     :stdin (and bodyp (or (plist-get values :body) "")))))
 
 (defun gh-api--release-delete (context tag callback errback)
   "Delete Release TAG."
@@ -1302,14 +1273,14 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
 (defun gh-api--commit-list (context params callback errback &optional force)
   "Fetch commit history in CONTEXT using PARAMS plist."
   (setq context (gh-api--context context t))
-  (let ((fields `((per_page . ,(or (plist-get params :limit) gh-list-limit)))))
-    (when-let* ((ref (plist-get params :ref))) (push (cons 'sha ref) fields))
-    (when-let* ((path (plist-get params :path))) (push (cons 'path path) fields))
-    (gh-api--read-json
-     context
-     (gh-api--rest-argv (gh-core--repo-endpoint context "commits") "GET"
-                        (nreverse fields) nil)
-     callback errback :force force :domain (gh-api--domain context 'commit))))
+  (gh-api--read-json
+   context
+   (gh-api--rest-argv
+    (gh-core--repo-endpoint context "commits") "GET"
+    (append `((per_page . ,(or (plist-get params :limit) gh-list-limit)))
+            (when-let* ((ref (plist-get params :ref))) `((sha . ,ref)))
+            (when-let* ((path (plist-get params :path))) `((path . ,path)))))
+   callback errback :force force :domain (gh-api--domain context 'commit)))
 
 (defun gh-api--commit-get (context sha callback errback &optional force)
   "Fetch Commit SHA details."
@@ -1409,8 +1380,8 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
    (gh-api--domain context 'notification) callback errback))
 
 (defun gh-api--notification-subscription
-    (context id subscribed ignored callback errback)
-  "Set notification thread ID subscription to SUBSCRIBED and IGNORED."
+    (context id subscribed callback errback)
+  "Set notification thread ID subscription to SUBSCRIBED."
   (setq context (gh-api--context context))
   (if (null subscribed)
       (gh-api--mutate-text
@@ -1422,8 +1393,8 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
      context
      (gh-api--rest-argv
       (format "notifications/threads/%s/subscription" id) "PUT"
-      `((subscribed . ,(if subscribed t :json-false))
-        (ignored . ,(if ignored t :json-false))))
+      '((subscribed . t)
+        (ignored . :json-false)))
      (gh-api--domain context 'notification) callback errback)))
 
 ;;; Search
@@ -1435,41 +1406,35 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
     (code . "path,repository,sha,textMatches,url")
     (commits . "sha,commit,author,committer,parents,repository,url")))
 
+(defun gh-api--search-argv (kind query options)
+  "Build a GitHub CLI search argument list from KIND, QUERY, and OPTIONS."
+  (append
+   (list "search" (symbol-name kind) query
+         "--limit" (number-to-string gh-list-limit)
+         "--json" (alist-get kind gh-api--search-fields))
+   (cl-loop for (key flag) in
+            '((:repo "--repo") (:owner "--owner")
+              (:state "--state") (:author "--author")
+              (:assignee "--assignee")
+              (:review-requested "--review-requested")
+              (:language "--language") (:filename "--filename")
+              (:extension "--extension") (:sort "--sort")
+              (:order "--order"))
+            for value = (plist-get options key)
+            when value append (list flag value))))
+
 (defun gh-api--search (context kind query callback errback &optional force options)
   "Search KIND for QUERY using OPTIONS plist."
   (setq context (gh-api--context context))
-  (let* ((kind (if (eq kind 'repositories) 'repos kind))
-         (argv (list "search" (symbol-name kind) query
-                     "--limit" (number-to-string gh-list-limit)
-                     "--json" (or (alist-get kind gh-api--search-fields)
-                                   "url"))))
-    (dolist (spec '((:repo "--repo") (:owner "--owner")
-                    (:state "--state") (:author "--author")
-                    (:assignee "--assignee") (:review-requested "--review-requested")
-                    (:language "--language") (:filename "--filename")
-                    (:extension "--extension") (:sort "--sort")
-                    (:order "--order")))
-      (when-let* ((value (plist-get options (car spec))))
-        (setq argv (append argv (list (cadr spec) (format "%s" value))))))
+  (let ((argv (gh-api--search-argv kind query options)))
     (gh-api--read-json
-     context argv callback errback :force force :cache (not (plist-get options :stream))
+     context argv callback errback :force force
      :domain (gh-api--domain context 'search (list kind query options)))))
 
 (defun gh-api--search-stream (context kind query callback errback &optional options)
   "Start a cancellable asynchronous KIND search for QUERY using OPTIONS."
   (setq context (gh-api--context context))
-  (let* ((kind (if (eq kind 'repositories) 'repos kind))
-         (argv (list "search" (symbol-name kind) query
-                     "--limit" (number-to-string gh-list-limit)
-                     "--json" (or (alist-get kind gh-api--search-fields) "url"))))
-    (dolist (spec '((:repo "--repo") (:owner "--owner")
-                    (:state "--state") (:author "--author")
-                    (:assignee "--assignee") (:review-requested "--review-requested")
-                    (:language "--language") (:filename "--filename")
-                    (:extension "--extension") (:sort "--sort")
-                    (:order "--order")))
-      (when-let* ((value (plist-get options (car spec))))
-        (setq argv (append argv (list (cadr spec) (format "%s" value))))))
+  (let ((argv (gh-api--search-argv kind query options)))
     (gh-client--json-async argv callback errback
                            :context context :cache nil :dedupe nil)))
 
@@ -1495,11 +1460,10 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
 ;;; Generic API
 
 (defun gh-api--generic-request
-    (context endpoint method fields paginate callback errback &optional force)
+    (context endpoint method fields paginate callback errback)
   "Request arbitrary REST ENDPOINT with METHOD, FIELDS, and PAGINATE."
   (setq context (gh-api--context context))
-  (let ((method (or method "GET")))
-    (gh-api--read-json
+  (gh-api--read-json
    context (gh-api--rest-argv endpoint method fields paginate)
    (lambda (data)
      (unless (string= method "GET")
@@ -1508,13 +1472,13 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
                 (when (gh-context-repository context)
                   (list :repository (gh-context-repository context))))))
      (funcall callback data))
-   errback :force force
+   errback
    :transform (and paginate #'gh-api--flatten-pages)
    :domain (gh-api--domain context 'generic-api endpoint)
-   :cache (string= method "GET") :preserve-false t)))
+   :cache (string= method "GET") :preserve-false t))
 
 (defun gh-api--graphql
-    (context query variables callback errback &optional force)
+    (context query variables callback errback)
   "Run GraphQL QUERY with VARIABLES alist."
   (setq context (gh-api--context context))
   (gh-api--read-json
@@ -1524,7 +1488,7 @@ pending review, adds every LINE or FILE thread asynchronously, and submits it."
             (lambda (entry)
               (list "-F" (format "%s=%s" (car entry) (cdr entry))))
             variables))
-   callback errback :force force
+   callback errback
    :domain (gh-api--domain context 'graphql (sxhash-equal query))
    :preserve-false t))
 

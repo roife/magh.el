@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -174,9 +174,7 @@ When nil, use `default-directory'."
 
 (defun gh-error-message (error)
   "Return a user-facing message for typed ERROR."
-  (condition-case nil
-      (error-message-string error)
-    (error (format "%s" error))))
+  (error-message-string error))
 
 (defun gh-core--user-error (error)
   "Raise typed ERROR as a `user-error'."
@@ -195,40 +193,35 @@ When nil, use `default-directory'."
 (defun gh-context-copy (context &rest overrides)
   "Copy CONTEXT and apply plist OVERRIDES to its slots."
   (let ((copy (copy-gh-context context)))
-    (while overrides
-      (let ((key (pop overrides))
-            (value (pop overrides)))
-        (pcase key
-          (:host (setf (gh-context-host copy) value))
-          (:owner (setf (gh-context-owner copy) value))
-          (:name (setf (gh-context-name copy) value))
-          (:repository (setf (gh-context-repository copy) value))
-          (:root (setf (gh-context-root copy) value))
-          (:branch (setf (gh-context-branch copy) value))
-          (:default-branch (setf (gh-context-default-branch copy) value))
-          (:ref (setf (gh-context-ref copy) value))
-          (:path (setf (gh-context-path copy) value))
-          (_ (signal 'gh-invalid-input
-                     (list (format "Unknown context field: %S" key)))))))
+    (cl-loop for (key value) on overrides by #'cddr
+             do (cl-ecase key
+                  (:host (setf (gh-context-host copy) value))
+                  (:owner (setf (gh-context-owner copy) value))
+                  (:name (setf (gh-context-name copy) value))
+                  (:repository (setf (gh-context-repository copy) value))
+                  (:root (setf (gh-context-root copy) value))
+                  (:branch (setf (gh-context-branch copy) value))
+                  (:default-branch
+                   (setf (gh-context-default-branch copy) value))
+                  (:ref (setf (gh-context-ref copy) value))
+                  (:path (setf (gh-context-path copy) value))))
     (gh-context-normalize copy)))
 
 (defun gh-context-normalize (context)
   "Normalize and return CONTEXT."
-  (let ((repo (gh-context-repository context)))
-    (when (and repo (string-match
-                     "\\`\\([^/]+\\)/\\([^/]+\\)\\'"
-                     (string-remove-suffix ".git" repo)))
+  (when-let* ((repo (gh-context-repository context)))
+    (setq repo (string-remove-suffix ".git" repo))
+    (when (string-match "\\`\\([^/]+\\)/\\([^/]+\\)\\'" repo)
       (setf (gh-context-owner context) (match-string 1 repo)
-            (gh-context-name context)
-            (string-remove-suffix ".git" (match-string 2 repo))))
-    (when (and (gh-context-owner context) (gh-context-name context))
-      (setf (gh-context-repository context)
-            (format "%s/%s" (gh-context-owner context)
-                    (gh-context-name context))))
-    (when-let* ((path (gh-context-path context)))
-      (setf (gh-context-path context)
-            (string-remove-prefix "./" (string-remove-prefix "/" path))))
-    context))
+            (gh-context-name context) (match-string 2 repo))))
+  (when (and (gh-context-owner context) (gh-context-name context))
+    (setf (gh-context-repository context)
+          (format "%s/%s" (gh-context-owner context)
+                  (gh-context-name context))))
+  (when-let* ((path (gh-context-path context)))
+    (setf (gh-context-path context)
+          (string-remove-prefix "./" (string-remove-prefix "/" path))))
+  context)
 
 (defun gh-core--remote-components (remote)
   "Parse REMOTE into (HOST OWNER NAME), or return nil."
@@ -258,11 +251,12 @@ When nil, use `default-directory'."
 
 (defun gh-core--git-output (root &rest args)
   "Run a local Git command in ROOT with ARGS and return trimmed output."
-  (when (and root (executable-find "git"))
+  (when-let* ((git (executable-find "git")))
     (with-temp-buffer
       (let ((default-directory root))
-        (when (zerop (apply #'process-file "git" nil t nil args))
-          (string-trim (buffer-string)))))))
+        (when (zerop (apply #'process-file git nil t nil args))
+          (let ((output (string-trim (buffer-string))))
+            (unless (string-empty-p output) output)))))))
 
 (defun gh-core--local-context (&optional directory)
   "Build a context from local Git metadata under DIRECTORY."
@@ -284,7 +278,7 @@ When nil, use `default-directory'."
                           :owner (nth 1 parts)
                           :name (nth 2 parts)
                           :root root
-                          :branch (unless (string-empty-p (or branch "")) branch)
+                          :branch branch
                           :default-branch default-branch
                           :ref (or branch default-branch))))))
 
@@ -317,7 +311,8 @@ be inferred.  This operation performs local Git inspection only."
          (cond
           ((gh-context-p value) (gh-context-normalize value))
           ((and (stringp value) (file-directory-p value))
-           (gh-core--local-context value))
+           (or (gh-core--local-context value)
+               (gh-context-create :host gh-host)))
           ((stringp value) (gh-context-from-repository value))
           (t (or (gh-core--local-context)
                  (gh-context-create :host gh-host))))))
@@ -341,73 +336,66 @@ be inferred.  This operation performs local Git inspection only."
 
 (defun gh-core--repo-endpoint (context &optional suffix)
   "Return a REST endpoint for CONTEXT and optional SUFFIX."
-  (let ((repo (gh-context-repository context)))
-    (unless repo
-      (signal 'gh-invalid-input (list "This request requires a repository")))
-    (concat "repos/" repo
-            (and suffix (concat "/" (string-remove-prefix "/" suffix))))))
+  (concat "repos/" (gh-context-repository context)
+          (and suffix (concat "/" (string-remove-prefix "/" suffix)))))
 
 (defun gh-core--url-path (path)
   "URL-encode every component in PATH while retaining slashes."
-  (mapconcat #'url-hexify-string (split-string (or path "") "/" t) "/"))
+  (mapconcat #'url-hexify-string (split-string path "/" t) "/"))
 
 ;;; Display helpers
 
 (defun gh-date-relative (timestamp)
   "Format ISO-8601 TIMESTAMP as a compact relative age."
-  (if (not (and timestamp (stringp timestamp)
-                (not (string-empty-p timestamp))))
+  (if (null timestamp)
       ""
-    (condition-case nil
-        (let* ((seconds (max 0 (float-time
-                                (time-subtract nil (date-to-time timestamp)))))
-               (minute 60.0)
-               (hour (* 60 minute))
-               (day (* 24 hour))
-               (week (* 7 day))
-               (month (* 30 day))
-               (year (* 365 day)))
-          (cond
-           ((< seconds minute) "now")
-           ((< seconds hour) (format "%dm" (floor (/ seconds minute))))
-           ((< seconds day) (format "%dh" (floor (/ seconds hour))))
-           ((< seconds week) (format "%dd" (floor (/ seconds day))))
-           ((< seconds month) (format "%dw" (floor (/ seconds week))))
-           ((< seconds year) (format "%dmo" (floor (/ seconds month))))
-           (t (format "%dy" (floor (/ seconds year))))))
-      (error timestamp))))
+    (let* ((seconds (max 0 (float-time
+                            (time-subtract nil (date-to-time timestamp)))))
+           (minute 60.0)
+           (hour (* 60 minute))
+           (day (* 24 hour))
+           (week (* 7 day))
+           (month (* 30 day))
+           (year (* 365 day)))
+      (cond
+       ((< seconds minute) "now")
+       ((< seconds hour) (format "%dm" (floor (/ seconds minute))))
+       ((< seconds day) (format "%dh" (floor (/ seconds hour))))
+       ((< seconds week) (format "%dd" (floor (/ seconds day))))
+       ((< seconds month) (format "%dw" (floor (/ seconds week))))
+       ((< seconds year) (format "%dmo" (floor (/ seconds month))))
+       (t (format "%dy" (floor (/ seconds year))))))))
 
 (defun gh-core--date (timestamp)
   "Format TIMESTAMP using `gh-date-format-function'."
   (funcall gh-date-format-function timestamp))
-
-(defun gh-core--alist-get (key alist &optional default)
-  "Get KEY from ALIST, tolerating symbol and string JSON keys."
-  (or (alist-get key alist)
-      (and (symbolp key) (alist-get (symbol-name key) alist nil nil #'equal))
-      (and (stringp key) (alist-get (intern key) alist))
-      default))
 
 (defun gh-core--name (value)
   "Extract a useful name/login/string from JSON VALUE."
   (cond
    ((stringp value) value)
    ((consp value)
-    (or (gh-core--alist-get 'login value)
-        (gh-core--alist-get 'name value)
-        (gh-core--alist-get 'full_name value)
-        (gh-core--alist-get 'title value)
-        (gh-core--alist-get 'message value)
-        ""))
-   (t "")))
+   (or (alist-get 'login value)
+        (alist-get 'name value)
+        (alist-get 'full_name value)
+        (alist-get 'title value)
+        (alist-get 'message value)))
+   (t nil)))
 
 (defun gh-core--names (values)
   "Return a comma-separated list of names from JSON VALUES."
-  (mapconcat #'gh-core--name (or values nil) ", "))
+  (mapconcat #'gh-core--name values ", "))
+
+(defun gh-core--comments-count (data)
+  "Return the normalized comment count from DATA."
+  (let ((comments (alist-get 'comments data)))
+    (or (alist-get 'commentsCount data)
+        (alist-get 'totalCount comments)
+        (length comments))))
 
 (defun gh-core--state-face (state)
   "Return the semantic gh.el face symbol for STATE."
-  (pcase (upcase (format "%s" state))
+  (pcase (upcase (or state ""))
     ((or "OPEN" "SUCCESS" "ACTIVE" "PUBLISHED" "APPROVED" "COMPLETED"
          "MERGED" "ENABLED")
      'gh-open-state)
@@ -430,29 +418,27 @@ locally detected errors."
 
 (defun gh-core--collect-async (requests callback errback)
   "Run asynchronous REQUESTS in parallel and collect their results.
-REQUESTS is an alist of (KEY . START), where START receives success and error
-callbacks.  CALLBACK receives a key-preserving alist after every request has
-succeeded.  ERRBACK is called at most once."
-  (if (null requests)
-      (gh-core--call-later callback nil)
-    (let ((remaining (length requests))
-          (failed nil)
-          results)
-      (dolist (request requests)
-        (let ((key (car request))
-              (start (cdr request)))
-          (funcall
-           start
-           (lambda (value)
-             (unless failed
-               (push (cons key value) results)
-               (cl-decf remaining)
-               (when (zerop remaining)
-                 (funcall callback (nreverse results)))))
-           (lambda (error)
-             (unless failed
-               (setq failed t)
-               (funcall errback error)))))))))
+REQUESTS is a non-empty alist of (KEY . START).  START receives success and
+error callbacks.  CALLBACK receives a key-preserving alist after every request
+has succeeded.  ERRBACK is called at most once."
+  (let ((remaining (length requests))
+        (failed nil)
+        results)
+    (dolist (request requests)
+      (let ((key (car request))
+            (start (cdr request)))
+        (funcall
+         start
+         (lambda (value)
+           (unless failed
+             (push (cons key value) results)
+             (cl-decf remaining)
+             (when (zerop remaining)
+               (funcall callback (nreverse results)))))
+         (lambda (error)
+           (unless failed
+             (setq failed t)
+             (funcall errback error))))))))
 
 (provide 'gh-core)
 ;;; gh-core.el ends here

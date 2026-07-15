@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -15,19 +15,17 @@
 ;;; Code:
 
 (require 'gh-candidate)
-(require 'gh-core)
 
 (declare-function gh-forge-mode "gh-forge" (&optional arg))
 (declare-function pr-review "pr-review" (url))
+(defvar gh-forge-mode nil)
 
 (defgroup gh-pr-review nil
   "Optional emacs-pr-review interoperability for gh.el."
   :group 'gh)
 
 (defvar gh-pr-review--saved-action nil
-  "Resource action present before `gh-pr-review-mode' was enabled.")
-
-(defvar gh-pr-review--saved-action-present-p nil)
+  "Pull Request action present before `gh-pr-review-mode' was enabled.")
 
 (defun gh-pr-review-open-resource (resource)
   "Open Pull Request RESOURCE with emacs-pr-review."
@@ -46,23 +44,20 @@
           (progn
             (unless (require 'pr-review nil t)
               (error "emacs-pr-review is not installed"))
-            (when (and (boundp 'gh-forge-mode) gh-forge-mode
-                       (fboundp 'gh-forge-mode))
+            (when gh-forge-mode
               (gh-forge-mode -1))
-            (let ((cell (assq 'pr gh-resource-actions)))
-              (setq gh-pr-review--saved-action-present-p (and cell t)
-                    gh-pr-review--saved-action (cdr cell)))
+            (setq gh-pr-review--saved-action
+                  (copy-sequence (assq 'pr gh-resource-actions)))
             (setf (alist-get 'pr gh-resource-actions)
                   #'gh-pr-review-open-resource))
         (error
          (setq gh-pr-review-mode nil)
          (user-error "%s" (error-message-string error))))
-    (if gh-pr-review--saved-action-present-p
+    (if gh-pr-review--saved-action
         (setf (alist-get 'pr gh-resource-actions)
-              gh-pr-review--saved-action)
+              (cdr gh-pr-review--saved-action))
       (setq gh-resource-actions (assq-delete-all 'pr gh-resource-actions)))
-    (setq gh-pr-review--saved-action nil
-          gh-pr-review--saved-action-present-p nil)))
+    (setq gh-pr-review--saved-action nil)))
 
 (provide 'gh-pr-review)
 ;;; gh-pr-review.el ends here

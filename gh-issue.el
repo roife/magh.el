@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -13,8 +13,6 @@
 
 ;;; Code:
 
-(require 'base64)
-(require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
 (require 'transient)
@@ -35,34 +33,31 @@
 (defun gh-issue--resource (context data)
   "Create an Issue resource from DATA in CONTEXT."
   (gh-resource-create
-   'issue context :number (gh-core--alist-get 'number data)
-   :title (gh-core--alist-get 'title data)
-   :url (or (gh-core--alist-get 'url data)
-            (gh-context-web-url
-             context (format "issues/%s" (gh-core--alist-get 'number data))))
-   :data data))
+   'issue context :number (alist-get 'number data)
+   :title (alist-get 'title data)
+   :url (alist-get 'url data)))
 
 (defun gh-issue--buffer-name (context &optional number state)
   "Return Issue buffer name for CONTEXT, NUMBER, and STATE."
   (if number
       (format "*gh: %s · Issue #%s*" (gh-context-repository context) number)
     (format "*gh: %s · Issues · %s*" (gh-context-repository context)
-            (or state gh-default-issue-state))))
+            state)))
 
 (defun gh-issue--row-values (data)
   "Return display plist for Issue DATA."
-  (let ((state (or (gh-core--alist-get 'state data) "")))
+  (let ((state (alist-get 'state data)))
     (list :state (gh-ui--styled (upcase state) (gh-core--state-face state))
           :identifier (gh-ui--styled
-                       (format "#%s" (gh-core--alist-get 'number data))
+                       (format "#%s" (alist-get 'number data))
                        'gh-resource-number)
-          :title (gh-ui--styled (gh-core--alist-get 'title data)
+          :title (gh-ui--styled (alist-get 'title data)
                                 'gh-resource-title)
           :author (gh-ui--styled
-                   (gh-core--name (gh-core--alist-get 'author data))
+                   (gh-core--name (alist-get 'author data))
                    'gh-author)
           :updated (gh-ui--styled
-                    (gh-core--date (gh-core--alist-get 'updatedAt data))
+                    (gh-core--date (alist-get 'updatedAt data))
                     'gh-date))))
 
 (defun gh-issue--insert-row (context data)
@@ -72,15 +67,15 @@
     (gh-ui--section (issue number resource t)
       (gh-ui--format-row (gh-issue--row-values data))
       (gh-ui--insert-header "Labels"
-                            (gh-core--names (gh-core--alist-get 'labels data))
+                            (gh-core--names (alist-get 'labels data))
                             'gh-label)
       (gh-ui--insert-header "Assigned"
-                            (gh-core--names (gh-core--alist-get 'assignees data))
+                            (gh-core--names (alist-get 'assignees data))
                             'gh-author)
       (gh-ui--insert-header "Comments"
-                            (length (or (gh-core--alist-get 'comments data) nil)))
+                            (gh-core--comments-count data))
       (gh-ui--insert-header "Created"
-                            (gh-core--date (gh-core--alist-get 'createdAt data))
+                            (gh-core--date (alist-get 'createdAt data))
                             'gh-date))))
 
 (defun gh-issue--render-list (context state data)
@@ -97,19 +92,12 @@
     (format "Load more (current limit %d)" gh-issue--limit)
     (insert "Press RET to double the list limit.\n")))
 
-(defun gh-issue--setup-list (context)
-  "Install list-local actions for CONTEXT."
-  (local-set-key (kbd "c") (lambda () (interactive) (gh-issue-create context)))
-  (local-set-key (kbd "t") #'gh-issue-cycle-state)
-  (setq gh-buffer-dispatch-function #'gh-issue-dispatch))
-
 ;;;###autoload
 (defun gh-issue-list (&optional context state params)
   "Open an asynchronous Issue list for CONTEXT, STATE, and PARAMS."
   (interactive)
   (setq context (gh-issue--context context)
-        state (or state gh-default-issue-state)
-        params (copy-sequence params))
+        state (or state gh-default-issue-state))
   (let ((limit (or (plist-get params :limit) gh-list-limit)))
     (gh-ui--open-page
      (gh-issue--buffer-name context nil state) context 'issue-list state
@@ -121,13 +109,14 @@
      :setup
      (lambda ()
        (setq gh-issue--state state gh-issue--params params gh-issue--limit limit)
-       (gh-issue--setup-list context)))))
+       (local-set-key (kbd "c")
+                      (lambda () (interactive) (gh-issue-create context)))
+       (local-set-key (kbd "t") #'gh-issue-cycle-state)
+       (setq gh-buffer-dispatch-function #'gh-issue-dispatch)))))
 
 (defun gh-issue-load-more ()
   "Double the current Issue list limit and refresh."
   (interactive)
-  (unless (derived-mode-p 'gh-section-mode)
-    (user-error "Not in an Issue list"))
   (let ((context gh-buffer-context)
         (state gh-issue--state)
         (params gh-issue--params)
@@ -149,26 +138,25 @@
 
 ;;; Details
 
-(defun gh-issue--render-comment (context comment index)
-  "Render COMMENT at INDEX in CONTEXT."
-  (let* ((author (gh-core--name (gh-core--alist-get 'author comment)))
-         (created (gh-core--date (gh-core--alist-get 'createdAt comment)))
-         (url (gh-core--alist-get 'url comment))
-         (resource (gh-resource-create 'comment context :id index :url url
-                                       :data comment)))
-    (gh-ui--section (comment (or (gh-core--alist-get 'id comment) index)
-                                 resource nil)
+(defun gh-issue--render-comment (context comment)
+  "Render COMMENT in CONTEXT."
+  (let* ((id (alist-get 'id comment))
+         (author (or (gh-core--name (alist-get 'author comment)) ""))
+         (created (gh-core--date (alist-get 'createdAt comment)))
+         (url (alist-get 'url comment))
+         (resource (gh-resource-create 'comment context :id id :url url)))
+    (gh-ui--section (comment id resource nil)
       (format "%s · %s"
               (propertize author 'font-lock-face 'gh-author)
               (propertize created 'font-lock-face 'gh-date))
-      (gh-ui--insert-markdown (or (gh-core--alist-get 'body comment) "") context))))
+      (gh-ui--insert-markdown (alist-get 'body comment) context))))
 
 (defun gh-issue--render-view (context data)
   "Render Issue DATA in CONTEXT."
   (let* ((resource (gh-issue--resource context data))
-         (number (gh-core--alist-get 'number data))
-         (title (gh-core--alist-get 'title data))
-         (state (gh-core--alist-get 'state data)))
+         (number (alist-get 'number data))
+         (title (alist-get 'title data))
+         (state (alist-get 'state data)))
     (insert (propertize (format "#%s  " number)
                         'font-lock-face 'gh-resource-number)
             (propertize title 'font-lock-face 'gh-resource-title) "\n")
@@ -176,44 +164,42 @@
                          (list 'gh-resource resource))
     (gh-ui--insert-header "State" (upcase state) (gh-core--state-face state))
     (gh-ui--insert-header "Author"
-                          (gh-core--name (gh-core--alist-get 'author data))
+                          (gh-core--name (alist-get 'author data))
                           'gh-author)
     (gh-ui--insert-header "Assignees"
-                          (gh-core--names (gh-core--alist-get 'assignees data))
+                          (gh-core--names (alist-get 'assignees data))
                           'gh-author)
     (gh-ui--insert-header "Labels"
-                          (gh-core--names (gh-core--alist-get 'labels data))
+                          (gh-core--names (alist-get 'labels data))
                           'gh-label)
     (gh-ui--insert-header
-     "Milestone" (gh-core--name (gh-core--alist-get 'milestone data)))
+     "Milestone" (gh-core--name (alist-get 'milestone data)))
     (gh-ui--insert-header
      "Dates" (format "created %s; updated %s"
-                     (gh-core--date (gh-core--alist-get 'createdAt data))
-                     (gh-core--date (gh-core--alist-get 'updatedAt data)))
+                     (gh-core--date (alist-get 'createdAt data))
+                     (gh-core--date (alist-get 'updatedAt data)))
      'gh-date)
     (insert "\n")
     (gh-ui--section (description 'description resource nil)
       "Description"
-      (gh-ui--insert-markdown (or (gh-core--alist-get 'body data)
-                                  "No description.") context))
-    (cl-loop for comment in (gh-core--alist-get 'comments data)
-             for index from 1
-             do (gh-issue--render-comment context comment index))
+      (gh-ui--insert-markdown (alist-get 'body data) context))
+    (dolist (comment (alist-get 'comments data))
+      (gh-issue--render-comment context comment))
     (when-let* ((closing-prs
-                 (gh-core--alist-get 'closedByPullRequestsReferences data)))
+                 (alist-get 'closedByPullRequestsReferences data)))
       (gh-ui--section (linked 'closing-pull-requests nil t)
         "Closed by pull requests"
         (dolist (pr closing-prs)
           (let ((pr-resource
                  (gh-resource-create
-                  'pr context :number (gh-core--alist-get 'number pr)
-                  :title (gh-core--alist-get 'title pr)
-                  :url (gh-core--alist-get 'url pr))))
+                  'pr context :number (alist-get 'number pr)
+                  :title (alist-get 'title pr)
+                  :url (alist-get 'url pr))))
             (gh-ui--insert-resource-line
              (gh-ui--row
-              (gh-ui--styled (format "#%s" (gh-core--alist-get 'number pr))
+              (gh-ui--styled (format "#%s" (alist-get 'number pr))
                              'gh-resource-number)
-              (gh-ui--styled (gh-core--alist-get 'title pr)
+              (gh-ui--styled (alist-get 'title pr)
                              'gh-resource-title))
              pr-resource)))))))
 
@@ -254,10 +240,8 @@
              (funcall api context
                       (lambda (items)
                         (funcall success
-                                 (delq nil
-                                       (mapcar (lambda (item)
-                                                 (gh-core--alist-get key item))
-                                               items))))
+                                 (mapcar (lambda (item) (alist-get key item))
+                                         items)))
                       error)))))
     (list :assignees (funcall names #'gh-api--repo-collaborators 'login)
           :labels (funcall names #'gh-api--repo-labels 'name)
@@ -301,7 +285,6 @@
   "Open Issue creation editor in CONTEXT with VALUES and BODY."
   (gh-edit-open
    (format "*gh: %s · New Issue*" (gh-context-repository context))
-   context (gh-resource-create 'issue context)
    (gh-issue--editor-fields context) values body
    (lambda (parsed parsed-body success error)
      (gh-api--issue-create context (plist-put parsed :body parsed-body)
@@ -315,29 +298,24 @@
   "Choose a Markdown template from ITEMS and open it in CONTEXT."
   (let* ((files (seq-filter
                  (lambda (item)
-                   (and (string= (gh-core--alist-get 'type item) "file")
-                        (string-match-p "\\.md\\'"
-                                        (or (gh-core--alist-get 'name item) ""))))
-                 (if (and (listp items) (listp (car items))) items (list items))))
+                   (and (string= (alist-get 'type item) "file")
+                        (string-suffix-p ".md" (alist-get 'name item))))
+                 items))
          (choices (cons "No template" (mapcar (lambda (item)
-                                                (gh-core--alist-get 'name item))
+                                                (alist-get 'name item))
                                               files)))
          (choice (completing-read "Issue template: " choices nil t)))
     (if (string= choice "No template")
         (gh-issue--open-create-editor context nil "")
-      (let ((item (cl-find choice files
-                           :key (lambda (entry) (gh-core--alist-get 'name entry))
-                           :test #'string=)))
+      (let ((item (seq-find (lambda (entry)
+                              (string= choice (alist-get 'name entry)))
+                            files)))
         (gh-api--content-get
-         context (gh-core--alist-get 'path item) (gh-context-ref context)
+         context (alist-get 'path item) (gh-context-ref context)
          (lambda (file)
            (pcase-let ((`(,values ,body)
                         (gh-issue--template-values
-                         (decode-coding-string
-                          (base64-decode-string
-                           (replace-regexp-in-string
-                            "\n" "" (or (gh-core--alist-get 'content file) "")))
-                          'utf-8))))
+                         (gh-api--decode-content file))))
              (gh-issue--open-create-editor context values body)))
          #'gh-core--user-error)))))
 
@@ -354,11 +332,11 @@
 
 (defun gh-issue--edit-values (data)
   "Convert Issue DATA to structured edit values."
-  (list :title (gh-core--alist-get 'title data)
-        :assignees (mapcar #'gh-core--name (gh-core--alist-get 'assignees data))
-        :labels (mapcar #'gh-core--name (gh-core--alist-get 'labels data))
-        :milestone (gh-core--name (gh-core--alist-get 'milestone data))
-        :projects (mapcar #'gh-core--name (gh-core--alist-get 'projectItems data))))
+  (list :title (alist-get 'title data)
+        :assignees (mapcar #'gh-core--name (alist-get 'assignees data))
+        :labels (mapcar #'gh-core--name (alist-get 'labels data))
+        :milestone (gh-core--name (alist-get 'milestone data))
+        :projects (mapcar #'gh-core--name (alist-get 'projectItems data))))
 
 (defun gh-issue--open-edit-editor (context number data)
   "Open editor for Issue NUMBER using DATA."
@@ -366,9 +344,8 @@
     (gh-edit-open
      (format "*gh: %s · Edit Issue #%s*"
              (gh-context-repository context) number)
-     context (gh-issue--resource context data)
      (gh-issue--editor-fields context) original
-     (or (gh-core--alist-get 'body data) "")
+     (alist-get 'body data)
      (lambda (values body success error)
        (let ((changes (list :title (plist-get values :title) :body body
                             :milestone (plist-get values :milestone))))
@@ -383,8 +360,7 @@
              (setq changes
                    (plist-put changes (nth 2 spec)
                               (seq-difference old new #'string=)))))
-         (gh-api--issue-edit context number changes success error)))
-     :source-buffer (current-buffer))))
+         (gh-api--issue-edit context number changes success error))))))
 
 ;;;###autoload
 (defun gh-issue-edit (&optional context number)
@@ -394,8 +370,7 @@
         number (or number (and (eq gh-buffer-resource-kind 'issue)
                                gh-buffer-resource-id)
                    (read-number "Issue number: ")))
-  (if (and gh-ui--data
-           (= (or (gh-core--alist-get 'number gh-ui--data) -1) number))
+  (if (equal (alist-get 'number gh-ui--data) number)
       (gh-issue--open-edit-editor context number gh-ui--data)
     (gh-api--issue-get
      context number

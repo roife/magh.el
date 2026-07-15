@@ -29,6 +29,32 @@
     '("api" "repos/o/r/items" "--method" "GET" "--paginate" "--slurp"
       "-F" "page=2" "-F" "enabled=true" "-f" "name=two words"))))
 
+(ert-deftest gh-api-paginated-content-contracts-are-normalized-once ()
+  (should
+   (equal (gh-api--flatten-pages
+           '((((id . 1)) ((id . 2))) (((id . 3)))))
+          '(((id . 1)) ((id . 2)) ((id . 3)))))
+  (should
+   (equal (gh-api--decode-content
+           '((encoding . "base64") (content . "aGVs\r\nbG8=")))
+          "hello"))
+  (should
+   (equal (gh-api--decode-content
+           '((encoding . "utf-8") (content . "plain text")))
+          "plain text")))
+
+(ert-deftest gh-api-search-arguments-share-one-builder ()
+  (should
+   (equal
+    (gh-api--search-argv
+     'repos "two words"
+     '(:owner "octo cat" :state "open"))
+    (append
+     '("search" "repos" "two words" "--limit")
+     (list (number-to-string gh-list-limit)
+           "--json" (alist-get 'repos gh-api--search-fields)
+           "--owner" "octo cat" "--state" "open")))))
+
 (ert-deftest gh-api-release-body-uses-stdin-not-a-shell-or-temporary-file ()
   (let ((context (gh-context-from-repository "o/r")) captured)
     (cl-letf (((symbol-function 'gh-client--mutate-text)
@@ -66,10 +92,10 @@
             (draft . nil) (prerelease . t) (html_url . "https://example/r")
             (assets . (((id . 8) (name . "a.zip") (download_count . 3)
                         (browser_download_url . "https://example/a"))))))))
-    (should (equal (gh-core--alist-get 'tagName release) "v1"))
-    (should (gh-core--alist-get 'isPrerelease release))
-    (should (= (gh-core--alist-get
-                'downloadCount (car (gh-core--alist-get 'assets release))) 3))))
+    (should (equal (alist-get 'tagName release) "v1"))
+    (should (alist-get 'isPrerelease release))
+    (should (= (alist-get
+                'downloadCount (car (alist-get 'assets release))) 3))))
 
 (ert-deftest gh-api-project-completion-uses-owner-and-json-output ()
   (let ((context (gh-context-from-repository "acme/widgets" "github.com"))
@@ -111,7 +137,11 @@
        context "v1" '(:draft :json-false :prerelease :json-false)
        #'ignore #'ignore)
       (should (member "--draft=false" (car captured)))
-      (should (member "--prerelease=false" (car captured))))))
+      (should (member "--prerelease=false" (car captured)))
+      (gh-api--repo-edit
+       context '(:issues nil :wiki t) #'ignore #'ignore)
+      (should (member "--enable-issues=false" (car captured)))
+      (should (member "--enable-wiki=true" (car captured))))))
 
 (ert-deftest gh-api-generic-output-preserves-json-false ()
   (let ((context (gh-context-create :host "github.com")) captured rendered)
@@ -146,7 +176,7 @@
                  (let* ((payload (json-parse-string
                                   (plist-get keys :stdin)
                                   :object-type 'alist :array-type 'list))
-                        (query (gh-core--alist-get 'query payload)))
+                        (query (alist-get 'query payload)))
                    (push (cons argv keys) mutations)
                    (funcall
                     success
@@ -173,20 +203,20 @@
            (payload (json-parse-string
                      (plist-get (cdr thread-call) :stdin)
                      :object-type 'alist :array-type 'list))
-           (query (gh-core--alist-get 'query payload))
-           (variables (gh-core--alist-get 'variables payload))
-           (input (gh-core--alist-get 'input variables)))
+           (query (alist-get 'query payload))
+           (variables (alist-get 'variables payload))
+           (input (alist-get 'input variables)))
       (should (string-match-p "AddPullRequestReviewThreadInput" query))
-      (should (equal (gh-core--alist-get 'pullRequestReviewId input)
+      (should (equal (alist-get 'pullRequestReviewId input)
                      "REVIEW_node"))
-      (should (equal (gh-core--alist-get 'subjectType input) "FILE"))
-      (should-not (gh-core--alist-get 'line input)))
+      (should (equal (alist-get 'subjectType input) "FILE"))
+      (should-not (alist-get 'line input)))
     (let* ((submit-call (nth 2 mutations))
            (payload (json-parse-string
                      (plist-get (cdr submit-call) :stdin)
                      :object-type 'alist :array-type 'list))
            (input (gh-api--json-at payload 'variables 'input)))
-      (should (equal (gh-core--alist-get 'event input) "APPROVE")))))
+      (should (equal (alist-get 'event input) "APPROVE")))))
 
 (ert-deftest gh-api-review-rolls-back-a-new-pending-review-on-thread-error ()
   (let ((context (gh-context-from-repository "acme/widgets"))
@@ -205,7 +235,7 @@
                  (let* ((payload (json-parse-string
                                   (plist-get keys :stdin)
                                   :object-type 'alist :array-type 'list))
-                        (query (gh-core--alist-get 'query payload)))
+                        (query (alist-get 'query payload)))
                    (push query queries)
                    (cond
                     ((string-match-p "addPullRequestReview(input" query)

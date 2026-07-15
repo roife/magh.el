@@ -25,6 +25,23 @@
 (ert-deftest gh-core-url-path-encodes-components-not-slashes ()
   (should (equal (gh-core--url-path "dir/a b#.el") "dir/a%20b%23.el")))
 
+(ert-deftest gh-core-empty-git-output-is-absent ()
+  (cl-letf (((symbol-function 'executable-find) (lambda (_) "/usr/bin/git"))
+            ((symbol-function 'process-file) (lambda (&rest _) 0)))
+    (should-not (gh-core--git-output default-directory
+                                     "branch" "--show-current"))))
+
+(ert-deftest gh-core-comment-count-accepts-cli-and-graphql-shapes ()
+  (should (= (gh-core--comments-count
+              '((commentsCount . 4) (comments . (((id . 1))))))
+             4))
+  (should (= (gh-core--comments-count
+              '((comments . ((totalCount . 3)))))
+             3))
+  (should (= (gh-core--comments-count
+              '((comments . (((id . 1)) ((id . 2))))))
+             2)))
+
 (ert-deftest gh-candidate-url-produces-structured-native-resources ()
   (let ((issue (gh-resource-from-url
                 "https://github.com/acme/widgets/issues/42"))

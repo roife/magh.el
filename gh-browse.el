@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -13,11 +13,9 @@
 
 ;;; Code:
 
-(require 'base64)
 (require 'cl-lib)
 (require 'dired)
 (require 'seq)
-(require 'subr-x)
 (require 'gh-api)
 (require 'gh-candidate)
 (require 'gh-ui)
@@ -25,7 +23,6 @@
 (defvar-local gh-browse--generation 0)
 (defvar-local gh-browse--ref nil)
 (defvar-local gh-browse--path nil)
-(defvar-local gh-browse--source-buffer nil)
 (defvar gh-browse--temporary-clones nil)
 
 (defvar-keymap gh-tree-mode-map
@@ -59,8 +56,7 @@
   "Minor mode for read-only source files fetched from GitHub."
   :lighter " GitHub"
   :keymap gh-remote-file-mode-map
-  (when gh-remote-file-mode
-    (setq buffer-read-only t)))
+  (setq buffer-read-only gh-remote-file-mode))
 
 (defun gh-browse--context (&optional context)
   "Resolve repository CONTEXT for browsing."
@@ -69,26 +65,22 @@
 (defun gh-browse--buffer-name (context ref path)
   "Return remote tree buffer name for CONTEXT, REF, and PATH."
   (format "*gh: %s · %s:%s*" (gh-context-repository context)
-          (or ref "HEAD") (or path "")))
-
-(defun gh-browse--file-buffer-name (context ref path)
-  "Return remote file buffer name."
-  (format "*gh: %s · %s:%s*" (gh-context-repository context) ref path))
+          ref path))
 
 (defun gh-browse--parent-path (path)
   "Return parent of repository PATH."
-  (let ((directory (file-name-directory (directory-file-name (or path "")))))
+  (let ((directory (file-name-directory (directory-file-name path))))
     (if directory (directory-file-name directory) "")))
 
 (defun gh-browse--item-resource (context ref item)
   "Create a native resource from remote content ITEM."
-  (let* ((type (gh-core--alist-get 'type item))
-         (path (gh-core--alist-get 'path item))
+  (let* ((type (alist-get 'type item))
+         (path (alist-get 'path item))
          (kind (if (string= type "dir") 'tree 'file)))
     (gh-resource-create
      kind (gh-context-copy context :ref ref :path path)
-     :path path :ref ref :title (gh-core--alist-get 'name item)
-     :url (gh-core--alist-get 'html_url item) :data item)))
+     :path path :ref ref :title (alist-get 'name item)
+     :url (alist-get 'html_url item) :data item)))
 
 (defun gh-browse--render-tree (context ref path data)
   "Render remote tree DATA."
@@ -100,22 +92,22 @@
             (or (gh-ui--styled path 'gh-file) "") "\n\n")
     (dolist (item (sort (copy-sequence data)
                         (lambda (a b)
-                          (let ((ta (gh-core--alist-get 'type a))
-                                (tb (gh-core--alist-get 'type b)))
+                          (let ((ta (alist-get 'type a))
+                                (tb (alist-get 'type b)))
                             (if (equal ta tb)
-                                (string< (gh-core--alist-get 'name a)
-                                         (gh-core--alist-get 'name b))
+                                (string< (alist-get 'name a)
+                                         (alist-get 'name b))
                               (string= ta "dir"))))))
       (let* ((resource (gh-browse--item-resource context ref item))
              (start (point))
-             (type (gh-core--alist-get 'type item))
-             (name (gh-core--alist-get 'name item))
-             (size (gh-core--alist-get 'size item)))
+             (type (alist-get 'type item))
+             (name (alist-get 'name item))
+             (size (alist-get 'size item)))
         (insert
          (gh-ui--row
           (gh-ui--styled type 'gh-permission)
           (and (not (string= type "dir"))
-               (gh-ui--styled (format "%s bytes" (or size 0)) 'gh-permission))
+               (gh-ui--styled (format "%s bytes" size) 'gh-permission))
           (gh-ui--styled (concat name (if (string= type "dir") "/" ""))
                          (if (string= type "dir") 'gh-branch 'gh-file)))
          "\n")
@@ -139,13 +131,11 @@
         ref (or ref (gh-context-ref context)
                 (gh-context-default-branch context) "HEAD")
         path (or path (gh-context-path context) ""))
-  (let ((buffer (get-buffer-create (gh-browse--buffer-name context ref path)))
-        (source (current-buffer)))
+  (let ((buffer (get-buffer-create (gh-browse--buffer-name context ref path))))
     (with-current-buffer buffer
-      (gh-tree-mode)
+      (unless (derived-mode-p 'gh-tree-mode) (gh-tree-mode))
       (setq gh-buffer-context (gh-context-copy context :ref ref :path path)
-            gh-browse--ref ref gh-browse--path path
-            gh-browse--source-buffer source)
+            gh-browse--ref ref gh-browse--path path)
       (gh-browse-refresh))
     (funcall gh-display-buffer-function buffer)
     buffer))
@@ -165,9 +155,8 @@
     (gh-api--content-list
      context path ref
      (lambda (data)
-       (when (and (= generation gh-browse--generation)
-                  (equal ref gh-browse--ref) (equal path gh-browse--path))
-         (if (and (listp data) (gh-core--alist-get 'type data))
+       (when (= generation gh-browse--generation)
+         (if (alist-get 'type data)
              (gh-browse--open-file-data context ref path data)
            (gh-browse--render-tree context ref path data))))
      (lambda (error)
@@ -185,12 +174,8 @@
 (defun gh-browse-parent ()
   "Open the parent remote directory."
   (interactive)
-  (let* ((context (gh-browse--context))
-         (path (or (and (derived-mode-p 'gh-tree-mode) gh-browse--path)
-                   (gh-context-path context) ""))
-         (parent (gh-browse--parent-path path)))
-    (gh-browse-repository context (or gh-browse--ref (gh-context-ref context))
-                          parent)))
+  (gh-browse-repository (gh-browse--context) gh-browse--ref
+                        (gh-browse--parent-path gh-browse--path)))
 
 (defun gh-browse-select-ref ()
   "Asynchronously select a branch or tag and reopen the current path."
@@ -207,14 +192,14 @@
        (let* ((refs
                (append
                 (mapcar (lambda (item)
-                          (let ((name (gh-core--alist-get 'name item)))
+                          (let ((name (alist-get 'name item)))
                             (cons (gh-ui--row
                                    (gh-ui--styled "branch" 'gh-permission)
                                    (gh-ui--styled name 'gh-branch))
                                   name)))
                         (alist-get 'branches result))
                 (mapcar (lambda (item)
-                          (let ((name (gh-core--alist-get 'name item)))
+                          (let ((name (alist-get 'name item)))
                             (cons (gh-ui--row
                                    (gh-ui--styled "tag" 'gh-permission)
                                    (gh-ui--styled name 'gh-tag))
@@ -260,20 +245,17 @@
       (gh-remote-file-mode 1)
       (set-buffer-modified-p nil)
       (when line
-        (goto-char (point-min)) (forward-line (1- (max 1 line)))))))
+        (goto-char (point-min))
+        (forward-line (1- line))))))
 
 (defun gh-browse--open-file-data (context ref path data &optional line buffer)
   "Open remote file DATA, using raw fallback when necessary."
-  (let ((buffer (or buffer
+    (let ((buffer (or buffer
                     (get-buffer-create
-                     (gh-browse--file-buffer-name context ref path)))))
-    (if-let* ((encoded (gh-core--alist-get 'content data)))
+                     (gh-browse--buffer-name context ref path)))))
+    (if (equal (alist-get 'encoding data) "base64")
         (gh-browse--display-file
-         buffer context ref path
-         (decode-coding-string
-          (base64-decode-string (replace-regexp-in-string "\n" "" encoded))
-          'utf-8)
-         line)
+         buffer context ref path (gh-api--decode-content data) line)
       (with-current-buffer buffer
         (gh-api--content-raw
          context path ref
@@ -288,7 +270,7 @@
   (setq context (gh-browse--context context)
         ref (or ref (gh-context-ref context) "HEAD"))
   (let ((buffer (get-buffer-create
-                 (gh-browse--file-buffer-name context ref path))))
+                 (gh-browse--buffer-name context ref path))))
     (with-current-buffer buffer
       (special-mode)
       (setq gh-buffer-context (gh-context-copy context :ref ref :path path)

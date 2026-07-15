@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -25,15 +25,14 @@
 
 (declare-function forge--pull-topic "forge-commands" (repo topic))
 (declare-function forge-current-topic "forge-topic" (&optional demand))
+(declare-function forge-get-url "forge-commands" (object))
 (declare-function forge-get-issue "forge-issue" (repo number))
 (declare-function forge-get-pullreq "forge-pullreq" (repo number))
 (declare-function forge-get-repository "forge-repo" (&rest arguments))
-(declare-function forge-issue-p "forge-issue" (object))
-(declare-function forge-pullreq-p "forge-pullreq" (object))
 (declare-function forge-remove-repository "forge-commands" (repository))
 (declare-function forge-visit-topic "forge-commands" (topic))
 (declare-function gh-pr-review-mode "gh-pr-review" (&optional arg))
-(defvar gh-pr-review-mode)
+(defvar gh-pr-review-mode nil)
 
 (defgroup gh-forge nil
   "Optional Forge interoperability for gh.el."
@@ -51,21 +50,9 @@
 
 (defvar gh-forge-mode nil)
 
-(defun gh-forge--oref (object slot)
-  "Read SLOT from optional Forge OBJECT without a compile-time class dependency."
-  (eieio-oref object slot))
-
-(defun gh-forge--oset (object slot value)
-  "Set SLOT of optional Forge OBJECT to VALUE."
-  (eieio-oset object slot value))
-
-(defun gh-forge--repository-url (context)
-  "Return repository web URL for CONTEXT."
-  (gh-context-web-url context))
-
 (defun gh-forge--ensure-repository (context)
   "Return a Forge repository for CONTEXT, inserting a selective entry if needed."
-  (let* ((url (gh-forge--repository-url context))
+  (let* ((url (gh-context-web-url context))
          (known (forge-get-repository url nil :known?))
          (repo (or known (forge-get-repository url nil :insert!))))
     (unless repo
@@ -74,19 +61,19 @@
       (cl-pushnew url gh-forge--added-repositories :test #'equal)
       ;; This entry exists to import individually selected topics, not to
       ;; maintain a full duplicate of gh.el's API cache.
-      (when (slot-exists-p repo 'selective-p)
-        (gh-forge--oset repo 'selective-p t)))
+      (let ((slot 'selective-p))
+        (eieio-oset repo slot t)))
     repo))
 
 (defun gh-forge--topic (repo kind number)
   "Return Forge topic NUMBER of KIND in REPO, if already imported."
-  (pcase kind
+  (pcase-exhaustive kind
     ('issue (forge-get-issue repo number))
     ('pr (forge-get-pullreq repo number))))
 
 (defun gh-forge--open-native (resource)
   "Open RESOURCE in gh.el without consulting action overrides."
-  (pcase (plist-get resource :kind)
+  (pcase-exhaustive (plist-get resource :kind)
     ('issue (gh-issue-view (plist-get resource :number)
                            (plist-get resource :context)))
     ('pr (gh-pr-view (plist-get resource :number)
@@ -138,17 +125,13 @@ KIND, NUMBER, and RESOURCE identify the selected gh.el candidate."
   (unless (require 'forge nil t)
     (user-error "Forge is not installed"))
   (let* ((topic (forge-current-topic t))
-         (repo (forge-get-repository topic))
-           (context
-          (gh-context-normalize
-           (gh-context-create :host (gh-forge--oref repo 'githost)
-                              :owner (gh-forge--oref repo 'owner)
-                              :name (gh-forge--oref repo 'name))))
-         (number (gh-forge--oref topic 'number)))
-    (cond
-     ((forge-issue-p topic) (gh-issue-view number context))
-     ((forge-pullreq-p topic) (gh-pr-view number context))
-     (t (user-error "Current Forge topic is not an Issue or Pull Request")))))
+         (resource (gh-resource-from-url (forge-get-url topic))))
+    (pcase (plist-get resource :kind)
+      ('issue (gh-issue-view (plist-get resource :number)
+                             (plist-get resource :context)))
+      ('pr (gh-pr-view (plist-get resource :number)
+                       (plist-get resource :context)))
+      (_ (user-error "Current Forge topic is not a GitHub Issue or Pull Request")))))
 
 ;;;###autoload
 (defun gh-forge-remove-repository (&optional repository-url)
@@ -182,16 +165,17 @@ KIND, NUMBER, and RESOURCE identify the selected gh.el candidate."
 
 (defun gh-forge--save-and-set-action (kind)
   "Save KIND's current open override and replace it with the Forge bridge."
-  (let ((cell (assq kind gh-resource-actions)))
-    (push (list kind (and cell t) (cdr cell)) gh-forge--saved-actions)
-    (setf (alist-get kind gh-resource-actions) #'gh-forge-open-resource)))
+  (push (cons kind (alist-get kind gh-resource-actions))
+        gh-forge--saved-actions)
+  (setf (alist-get kind gh-resource-actions) #'gh-forge-open-resource))
 
 (defun gh-forge--restore-actions ()
   "Restore resource overrides saved when `gh-forge-mode' was enabled."
   (dolist (saved gh-forge--saved-actions)
-    (pcase-let ((`(,kind ,present ,value) saved))
-      (if present
-          (setf (alist-get kind gh-resource-actions) value)
+    (let ((kind (car saved))
+          (action (cdr saved)))
+      (if action
+          (setf (alist-get kind gh-resource-actions) action)
         (setq gh-resource-actions (assq-delete-all kind gh-resource-actions)))))
   (setq gh-forge--saved-actions nil))
 
@@ -208,8 +192,7 @@ KIND, NUMBER, and RESOURCE identify the selected gh.el candidate."
             (require 'forge-commands)
             (require 'forge-issue)
             (require 'forge-pullreq)
-            (when (and (boundp 'gh-pr-review-mode) gh-pr-review-mode
-                       (fboundp 'gh-pr-review-mode))
+            (when gh-pr-review-mode
               (gh-pr-review-mode -1))
             (setq gh-forge--saved-actions nil)
             (gh-forge--save-and-set-action 'issue)

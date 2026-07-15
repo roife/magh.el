@@ -4,9 +4,8 @@
 (require 'ert)
 
 (defconst gh-test-root
-  (file-name-directory (directory-file-name
-                        (file-name-directory (or load-file-name
-                                                 buffer-file-name)))))
+  (file-name-parent-directory
+   (file-name-directory (or load-file-name buffer-file-name))))
 
 (add-to-list 'load-path gh-test-root)
 (setq load-prefer-newer t)

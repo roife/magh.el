@@ -4,7 +4,8 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (magit "4.0.0"))
+;; Package-Requires: ((emacs "31.1") (magit "4.0.0")
+;;                    (markdown-mode "2.6"))
 
 ;;; Commentary:
 
@@ -16,6 +17,7 @@
 ;;; Code:
 
 (require 'ansi-color)
+(require 'browse-url)
 (require 'button)
 (require 'cl-lib)
 (require 'diff-mode)
@@ -25,17 +27,15 @@
 (require 'magit-log)
 (require 'magit-process)
 (require 'magit-section)
+(require 'markdown-mode)
 (require 'subr-x)
 (require 'url)
+(require 'url-http)
+(require 'gh-candidate)
 (require 'gh-core)
 
 (declare-function gh-dispatch "gh-dispatch")
-(declare-function gh-resource-open "gh-candidate")
-(declare-function gh-resource-browse "gh-candidate")
-(declare-function gh-resource-from-url "gh-candidate")
-(declare-function gh-resource-create "gh-candidate")
-(declare-function gh-resource-url "gh-candidate")
-(declare-function gh-candidate-actions "gh-candidate")
+(defvar url-http-end-of-headers)
 
 ;;; Faces
 
@@ -101,10 +101,6 @@
   "Top-level resource kind displayed by the current gh.el page.")
 (defvar-local gh-buffer-resource-id nil
   "Stable top-level resource identifier displayed by this page.")
-(defvar-local gh-buffer-source-buffer nil
-  "Buffer from which the current gh.el page was opened.")
-(defvar-local gh-buffer-preview-p nil
-  "Whether the current buffer is a disposable Consult preview.")
 (defvar-local gh-buffer-refresh-function nil
   "Asynchronous fetch function for the current page.")
 (defvar-local gh-buffer-render-function nil
@@ -113,8 +109,6 @@
   "Contextual Transient function for the current page.")
 (defvar-local gh-ui--generation 0)
 (defvar-local gh-ui--data nil)
-(defvar-local gh-ui--pending-state nil)
-(defvar-local gh-ui--context-signature nil)
 
 (defvar gh-ui--visibility-cache (make-hash-table :test #'equal)
   "Visibility snapshots for pages reopened during this Emacs session.")
@@ -150,27 +144,27 @@
 SPEC is (TYPE KEY RESOURCE &optional HIDE).  KEY is stable across refreshes and
 RESOURCE is a structured resource plist."
   (declare (indent 2) (debug t))
-  (pcase-let ((`(,type ,key ,resource . ,rest) spec))
-    `(magit-insert-section
-         ((eval ',type)
-          (gh-section-value-create :key ,key :resource ,resource)
-          ,(car rest))
-       (let ((start (point)))
-         (magit-insert-heading ,heading)
-         (when ,resource
-           (add-text-properties start (point)
-                                (list 'gh-resource ,resource))))
-       (magit-insert-section-body
-         ,@body))))
+  (let ((resource-var (gensym "resource")))
+    (pcase-let ((`(,type ,key ,resource . ,rest) spec))
+      `(let ((,resource-var ,resource))
+         (magit-insert-section
+             (,type
+              (gh-section-value-create :key ,key :resource ,resource-var)
+              ,(car rest))
+           (let ((start (point)))
+             (magit-insert-heading ,heading)
+             (when ,resource-var
+               (add-text-properties start (point)
+                                    (list 'gh-resource ,resource-var))))
+           (magit-insert-section-body
+             ,@body))))))
 
 (defun gh-ui--section-resource (&optional section)
   "Return structured resource stored in SECTION or current section."
   (let* ((section (or section (magit-current-section)))
          (value (and section (oref section value))))
-    (cond
-     ((gh-section-value-p value) (gh-section-value-resource value))
-     ((and (listp value) (plist-get value :kind)) value)
-     (t nil))))
+    (when (gh-section-value-p value)
+      (gh-section-value-resource value))))
 
 (defun gh-ui-resource-at-point ()
   "Return the structured resource at point."
@@ -181,50 +175,21 @@ RESOURCE is a structured resource plist."
 (defun gh-ui--visibility-enabled-p ()
   "Return non-nil when visibility caching applies to this page."
   (or (eq gh-section-cache-visibility t)
-      (and (listp gh-section-cache-visibility)
-           (memq gh-buffer-resource-kind gh-section-cache-visibility))))
+      (memq gh-buffer-resource-kind gh-section-cache-visibility)))
 
 (defun gh-ui--page-key ()
   "Return the session visibility cache key for the current page."
   (list gh-buffer-resource-kind gh-buffer-resource-id
-        (and gh-buffer-context (gh-context-host gh-buffer-context))
-        (and gh-buffer-context (gh-context-repository gh-buffer-context))
-        (and gh-buffer-context (gh-context-ref gh-buffer-context))
-        (and gh-buffer-context (gh-context-path gh-buffer-context))))
-
-(defun gh-ui--walk-sections (function &optional root)
-  "Call FUNCTION for ROOT and all its descendants."
-  (when-let* ((section (or root magit-root-section)))
-    (funcall function section)
-    (dolist (child (oref section children))
-      (gh-ui--walk-sections function child))))
-
-(defun gh-ui--visibility-snapshot ()
-  "Return an alist of section identifiers and hidden states."
-  (let (result)
-    (gh-ui--walk-sections
-     (lambda (section)
-       (unless (eq section magit-root-section)
-         (push (cons (magit-section-ident section) (oref section hidden)) result))))
-    result))
+        (gh-context-host gh-buffer-context)
+        (gh-context-repository gh-buffer-context)
+        (gh-context-ref gh-buffer-context)
+        (gh-context-path gh-buffer-context)))
 
 (defun gh-ui--remember-visibility ()
   "Remember current page section visibility when configured."
   (when (and (gh-ui--visibility-enabled-p) magit-root-section)
-    (puthash (gh-ui--page-key) (gh-ui--visibility-snapshot)
+    (puthash (gh-ui--page-key) (copy-tree magit-section-visibility-cache)
              gh-ui--visibility-cache)))
-
-(defun gh-ui--restore-cached-visibility ()
-  "Apply a visibility snapshot for a newly opened page."
-  (when-let* ((snapshot (and (gh-ui--visibility-enabled-p)
-                             (gethash (gh-ui--page-key)
-                                      gh-ui--visibility-cache))))
-    (gh-ui--walk-sections
-     (lambda (section)
-       (when-let* ((cell (assoc (magit-section-ident section) snapshot)))
-         (if (cdr cell)
-             (magit-section-hide section)
-           (magit-section-show section)))))))
 
 (defun gh-ui--capture-state ()
   "Capture point, window start, and stable section identity."
@@ -243,38 +208,23 @@ RESOURCE is a structured resource plist."
      (if-let* ((ident (plist-get state :section))
                (section (magit-get-section ident)))
          (goto-char (oref section start))
-       (goto-char (min (or (plist-get state :point) (point-min)) (point-max)))))
+       (goto-char (min (plist-get state :point) (point-max)))))
     ('line
      (goto-char (point-min))
-     (forward-line (1- (max 1 (or (plist-get state :line) 1))))
-     (move-to-column (or (plist-get state :column) 0)))
+     (forward-line (1- (plist-get state :line)))
+     (move-to-column (plist-get state :column)))
     (_ (goto-char (point-min))))
   (when-let* ((window (get-buffer-window (current-buffer) t))
               (start (plist-get state :window-start)))
     (set-window-start window (min start (point-max)) t)))
 
-(defun gh-ui--context-signature ()
-  "Return a value identifying the current buffer request context."
-  (list (and gh-buffer-context (gh-context-host gh-buffer-context))
-        (and gh-buffer-context (gh-context-repository gh-buffer-context))
-        (and gh-buffer-context (gh-context-ref gh-buffer-context))
-        (and gh-buffer-context (gh-context-path gh-buffer-context))
-        gh-buffer-resource-kind gh-buffer-resource-id))
-
 (defun gh-ui--replace (renderer data state)
   "Replace page contents by calling RENDERER with DATA, then restore STATE."
-  (let* ((old-root magit-root-section)
-         (loading-only
-          (and old-root
-               (let ((children (oref old-root children)))
-                 (and (= (length children) 1)
-                      (eq (oref (car children) type) 'loading)))))
-        (inhibit-read-only t))
+  (let ((inhibit-read-only t))
     (erase-buffer)
-    ;; Leave `magit-root-section' pointing at OLD-ROOT until the top-level
-    ;; macro starts.  `magit-insert-section' atomically saves that value as its
-    ;; predecessor and installs the new root; pre-clearing it breaks nested
-    ;; section parentage on the second asynchronous refresh.
+    ;; Leave `magit-root-section' in place until the top-level macro starts.
+    ;; `magit-insert-section' saves it as the predecessor and installs the new
+    ;; root; pre-clearing it breaks nested section parentage on refresh.
     (magit-insert-section
         (gh-page (gh-section-value-create
                   :key (gh-ui--page-key)
@@ -282,8 +232,6 @@ RESOURCE is a structured resource plist."
                              gh-buffer-resource-kind gh-buffer-context
                              :id gh-buffer-resource-id)))
       (funcall renderer data))
-    (when (or (null old-root) loading-only)
-      (gh-ui--restore-cached-visibility))
     (goto-char (point-min))
     (when state (gh-ui--restore-state state))))
 
@@ -315,48 +263,47 @@ With FORCE non-nil (interactively, a prefix argument), bypass completed cache."
   (run-hooks 'gh-pre-refresh-hook)
   (cl-incf gh-ui--generation)
   (let ((generation gh-ui--generation)
-        (signature (gh-ui--context-signature))
         (state (gh-ui--capture-state)))
-    (setq gh-ui--pending-state state
-          gh-ui--context-signature signature)
     (setq header-line-format
           (propertize " Loading GitHub data…" 'font-lock-face 'gh-loading))
     (unless gh-ui--data (gh-ui--render-loading))
     (funcall
      gh-buffer-refresh-function
      (lambda (data)
-       (when (and (= generation gh-ui--generation)
-                  (equal signature (gh-ui--context-signature)))
+       (when (= generation gh-ui--generation)
          (setq gh-ui--data data
                header-line-format nil)
-         (gh-ui--replace gh-buffer-render-function data gh-ui--pending-state)
+         (gh-ui--replace gh-buffer-render-function data state)
          (run-hooks 'gh-post-refresh-hook)))
      (lambda (error)
-       (when (and (= generation gh-ui--generation)
-                  (equal signature (gh-ui--context-signature)))
+       (when (= generation gh-ui--generation)
          (setq header-line-format nil)
-         (gh-ui--render-error error gh-ui--pending-state)
+         (gh-ui--render-error error state)
          (run-hooks 'gh-post-refresh-hook)))
      (and force t))))
 
 (cl-defun gh-ui--open-page
-    (name context kind id fetch render &key preview source-buffer setup)
+    (name context kind id fetch render &key preview setup)
   "Open a native page NAME for KIND and ID in CONTEXT.
 FETCH is called with success, error, and force arguments.  RENDER inserts page
 contents from fetched data.  PREVIEW makes the buffer disposable.  SETUP, when
 non-nil, runs in the page buffer after mode initialization."
-  (let* ((source (or source-buffer (current-buffer)))
-         (buffer (get-buffer-create name)))
+  (let ((buffer (get-buffer-create name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'gh-section-mode) (gh-section-mode))
       (setq gh-buffer-context context
             gh-buffer-resource-kind kind
             gh-buffer-resource-id id
-            gh-buffer-source-buffer source
             gh-buffer-preview-p preview
             gh-buffer-refresh-function fetch
-            gh-buffer-render-function render
-            gh-ui--context-signature (gh-ui--context-signature))
+            gh-buffer-render-function render)
+      (unless magit-root-section
+        (let ((cache-visibility (gh-ui--visibility-enabled-p)))
+          (setq magit-section-cache-visibility (and cache-visibility t)
+                magit-section-visibility-cache
+                (and cache-visibility
+                     (copy-tree (gethash (gh-ui--page-key)
+                                         gh-ui--visibility-cache))))))
       (when setup (funcall setup))
       (gh-ui-refresh))
     (run-hooks 'gh-pre-display-buffer-hook)
@@ -371,37 +318,23 @@ non-nil, runs in the page buffer after mode initialization."
 (defun gh-ui-visit ()
   "Visit the native resource at point."
   (interactive)
-  (let ((resource (gh-ui-resource-at-point)))
-    (unless resource (user-error "No GitHub resource at point"))
-    (if (fboundp 'gh-resource-open)
-        (gh-resource-open resource)
-      (user-error "GitHub resource actions are not loaded"))))
+  (gh-resource-open (gh-ui-resource-at-point)))
 
 (defun gh-ui-browse ()
   "Explicitly browse the resource at point on GitHub."
   (interactive)
-  (let ((resource (gh-ui-resource-at-point)))
-    (unless resource (user-error "No GitHub resource at point"))
-    (if (fboundp 'gh-resource-browse)
-        (gh-resource-browse resource)
-      (browse-url (plist-get resource :url)))))
+  (gh-resource-browse (gh-ui-resource-at-point)))
 
 (defun gh-ui-copy-url ()
   "Copy the resource URL at point."
   (interactive)
-  (let ((resource (gh-ui-resource-at-point)))
-    (unless (and resource (fboundp 'gh-resource-url))
-      (user-error "No GitHub resource URL at point"))
-    (let ((url (gh-resource-url resource)))
-      (unless url (user-error "Resource has no GitHub URL"))
-      (kill-new url)
-      (message "Copied %s" url))))
+  (gh-resource-copy-url (gh-ui-resource-at-point)))
 
 (defun gh-ui-dispatch ()
   "Open the contextual action menu for this page."
   (interactive)
   (let* ((resource (gh-ui-resource-at-point))
-         (action (and resource (fboundp 'gh-candidate-actions)
+         (action (and resource
                       (plist-get (gh-candidate-actions
                                   (plist-get resource :kind))
                                  :dispatch))))
@@ -413,16 +346,14 @@ non-nil, runs in the page buffer after mode initialization."
 (defun gh-ui-main-dispatch ()
   "Open the top-level gh.el dispatch menu."
   (interactive)
-  (if (fboundp 'gh-dispatch)
-      (call-interactively #'gh-dispatch)
-    (user-error "gh.el dispatch is not loaded")))
+  (call-interactively #'gh-dispatch))
 
 (defun gh-ui-quit ()
   "Leave the current gh.el page using `gh-bury-buffer-function'."
   (interactive)
   (gh-ui--remember-visibility)
   (if gh-buffer-preview-p
-      (kill-buffer (current-buffer))
+      (kill-buffer)
     (funcall gh-bury-buffer-function)))
 
 ;;; Shared renderers
@@ -440,11 +371,6 @@ non-nil, runs in the page buffer after mode initialization."
         (add-text-properties start (point) (list 'gh-resource resource))))
     (insert "\n")))
 
-(defun gh-ui--insert-state (state)
-  "Insert semantic STATE text."
-  (insert (propertize (upcase (format "%s" state))
-                      'font-lock-face (gh-core--state-face state))))
-
 (defun gh-ui--insert-resource-line (text resource &optional face)
   "Insert TEXT line carrying structured RESOURCE."
   (let ((start (point)))
@@ -453,10 +379,8 @@ non-nil, runs in the page buffer after mode initialization."
 
 (defun gh-ui--styled (value face)
   "Return VALUE as text carrying FACE, or nil when VALUE is empty."
-  (when value
-    (let ((text (format "%s" value)))
-      (unless (string-empty-p text)
-        (propertize text 'font-lock-face face)))))
+  (when (and value (not (equal value "")))
+    (propertize (format "%s" value) 'font-lock-face face)))
 
 (defun gh-ui--row (&rest values)
   "Join non-empty VALUES with two spaces, preserving text properties.
@@ -480,13 +404,6 @@ matches ordinary Magit section headings and the layouts in doc/UI.md."
                  (or fields
                      '(:state :identifier :title :author :review :updated)))))
 
-(defun gh-ui--face-sequence (face)
-  "Return FACE as a sequence suitable for a face text property."
-  (cond
-   ((null face) nil)
-   ((and (listp face) (not (keywordp (car face)))) face)
-   (t (list face))))
-
 (defun gh-ui--adopt-font-lock-faces (start end &optional object)
   "Move persistent `face' properties from START to END to `font-lock-face'.
 OBJECT is a string when operating on a string and nil for the current buffer.
@@ -499,32 +416,25 @@ must use `font-lock-face' to survive just-in-time refontification."
                     position 'face object end))
              (face (get-text-property position 'face object)))
         (when face
-          (let* ((existing (get-text-property
-                            position 'font-lock-face object))
-                 (faces (delete-dups
-                         (append (gh-ui--face-sequence face)
-                                 (gh-ui--face-sequence existing))))
-                 (merged (if (cdr faces) faces (car faces))))
-            (put-text-property position next 'font-lock-face merged object)
-            (remove-list-of-text-properties
-             position next '(face) object)))
+          (font-lock-prepend-text-property
+           position next 'font-lock-face face object)
+          (remove-list-of-text-properties position next '(face) object))
         (setq position next))))
   object)
 
 (defun gh-ui--fontified-string (text mode)
-  "Return TEXT fontified using MODE when available."
+  "Return TEXT fontified using MODE."
   (with-temp-buffer
     (insert (or text ""))
-    (when (fboundp mode)
-      (delay-mode-hooks (funcall mode))
-      (font-lock-ensure))
+    (delay-mode-hooks (funcall mode))
+    (font-lock-ensure)
     (let ((result (buffer-substring (point-min) (point-max))))
       (gh-ui--adopt-font-lock-faces 0 (length result) result)
       result)))
 
 (defun gh-ui--make-resource-button (start end resource)
   "Turn START to END into a native RESOURCE button."
-  (when (and resource (fboundp 'gh-resource-open))
+  (when resource
     (make-text-button
      start end 'follow-link t 'gh-resource resource
      'help-echo "Open native gh.el resource"
@@ -544,26 +454,17 @@ must use `font-lock-face' to survive just-in-time refontification."
   (mouse-set-point event)
   (gh-ui-open-image-at-point))
 
-(defun gh-ui--image-response-start ()
-  "Return start of the body in the current URL response buffer."
-  (goto-char (point-min))
-  (or (and (boundp 'url-http-end-of-headers)
-           (cond
-            ((markerp url-http-end-of-headers)
-             (marker-position url-http-end-of-headers))
-            ((integerp url-http-end-of-headers)
-             url-http-end-of-headers)))
-      (and (re-search-forward "\r?\n\r?\n" nil t) (point))))
-
 (defun gh-ui--image-finished (status target overlay url)
   "Install an image response described by STATUS into TARGET OVERLAY for URL."
   (let ((response (current-buffer)))
     (unwind-protect
-        (when (and (buffer-live-p target) (overlayp overlay)
-                   (overlay-buffer overlay) (null (plist-get status :error)))
-          (let* ((start (gh-ui--image-response-start))
-                 (size (and start (- (point-max) start))))
-            (when (and size (<= size gh-view-inline-image-max-bytes))
+        (when (and (buffer-live-p target) (overlay-buffer overlay)
+                   (null (plist-get status :error)))
+          (let* ((start (if (markerp url-http-end-of-headers)
+                            (marker-position url-http-end-of-headers)
+                          url-http-end-of-headers))
+                 (size (- (point-max) start)))
+            (when (<= size gh-view-inline-image-max-bytes)
               (let* ((bytes (buffer-substring-no-properties start (point-max)))
                      (image (ignore-errors
                               (create-image bytes nil t
@@ -574,7 +475,7 @@ must use `font-lock-face' to survive just-in-time refontification."
                     (overlay-put overlay 'display image)
                     (overlay-put overlay 'help-echo
                                  (format "Open original image: %s" url))))))))
-      (when (buffer-live-p response) (kill-buffer response)))))
+      (kill-buffer response))))
 
 (defun gh-ui--load-inline-images (start end)
   "Start asynchronous image loads for Markdown image syntax in START to END."
@@ -612,8 +513,7 @@ must use `font-lock-face' to survive just-in-time refontification."
              (url (match-string-no-properties 0))
              ;; URL parsing performs its own regexp matches, so capture every
              ;; position before calling it.
-             (resource (and (fboundp 'gh-resource-from-url)
-                            (gh-resource-from-url url context))))
+             (resource (gh-resource-from-url url context)))
         (gh-ui--make-resource-button begin finish resource)))
     (goto-char start)
     (while (re-search-forward
@@ -655,9 +555,8 @@ must use `font-lock-face' to survive just-in-time refontification."
 
 (defun gh-ui--insert-markdown (text &optional context)
   "Insert Markdown TEXT with GFM fontification and native resource links."
-  (let ((start (point))
-        (mode (and (require 'markdown-mode nil t) 'gfm-mode)))
-    (insert (if mode (gh-ui--fontified-string text mode) (or text "")))
+  (let ((start (point)))
+    (insert (gh-ui--fontified-string text 'gfm-mode))
     (unless (bolp) (insert "\n"))
     (let ((end (point)))
       (gh-ui--linkify-references start end (or context gh-buffer-context))
@@ -668,8 +567,8 @@ must use `font-lock-face' to survive just-in-time refontification."
   (let ((start (point)))
     (insert (gh-ui--fontified-string text 'diff-mode))
     (unless (bolp) (insert "\n"))
-    (add-face-text-property start (point) 'default nil)
-    (gh-ui--adopt-font-lock-faces start (point))))
+    (font-lock-prepend-text-property
+     start (point) 'font-lock-face 'default)))
 
 (defun gh-ui--insert-ansi (text)
   "Insert ANSI-colored TEXT safely."

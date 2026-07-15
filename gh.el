@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; URL: https://github.com/roife/gh.el
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (magit "4.0.0") (consult "2.0")
+;; Package-Requires: ((emacs "31.1") (magit "4.0.0") (consult "2.0")
 ;;                    (transient "0.7.0") (markdown-mode "2.6"))
 
 ;;; Commentary:
@@ -16,13 +16,6 @@
 ;; `M-x gh' opens User Status; `M-x gh-dispatch' opens all entry points.
 
 ;;; Code:
-
-(require 'gh-core)
-(require 'gh-client)
-(require 'gh-api)
-(require 'gh-ui)
-(require 'gh-candidate)
-(require 'gh-edit)
 
 (require 'gh-repo)
 (require 'gh-issue)

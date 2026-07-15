@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -89,15 +89,11 @@
     ("x" "Clean temporary clones" gh-clean-temporary-clones)
     ("A" "Switch account" gh-auth-switch)]])
 
-(defun gh-customize ()
-  "Open the gh.el Customize group."
-  (interactive)
-  (customize-group 'gh))
-
 (transient-define-prefix gh-settings-dispatch ()
   "gh.el settings and cache."
   [["Settings"
-    ("c" "Customize gh.el" gh-customize)
+    ("c" "Customize gh.el"
+     (lambda () (interactive) (customize-group 'gh)))
     ("x" "Clear query cache" gh-client-clear-cache)]
    ["Fallbacks"
     ("!" "Arbitrary gh command" gh-command)

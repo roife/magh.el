@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -14,8 +14,6 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'seq)
-(require 'subr-x)
 (require 'gh-api)
 (require 'gh-candidate)
 (require 'gh-ui)
@@ -24,41 +22,18 @@
 (declare-function gh-review-requests "gh-pr")
 (declare-function gh-search-dispatch "gh-search")
 
-(defun gh-pages--repo-name (data)
-  "Extract repository name from DATA."
-  (let ((repo (gh-core--alist-get 'repository data)))
-    (or (gh-core--alist-get 'nameWithOwner repo)
-        (gh-core--alist-get 'fullName repo)
-        (gh-core--alist-get 'nameWithOwner data)
-        (gh-core--alist-get 'fullName data))))
-
-(defun gh-pages--context-for (base data)
-  "Build repository context for DATA using BASE host."
-  (if-let* ((name (gh-pages--repo-name data)))
-      (gh-context-from-repository name (gh-context-host base))
-    base))
-
-(defun gh-pages--topic-resource (base kind data)
-  "Create KIND topic resource from search DATA."
-  (let ((context (gh-pages--context-for base data)))
-    (gh-resource-create
-     kind context :number (gh-core--alist-get 'number data)
-     :title (gh-core--alist-get 'title data)
-     :url (gh-core--alist-get 'url data) :data data)))
-
 (defun gh-pages--insert-topic (base kind data)
   "Insert account topic KIND from DATA."
-  (let* ((resource (gh-pages--topic-resource base kind data))
-         (state (if (gh-core--alist-get 'isDraft data)
-                    "DRAFT" (or (gh-core--alist-get 'state data) "")))
-         (author (gh-core--name (gh-core--alist-get 'author data)))
-         (review (and (eq kind 'pr)
-                      (gh-core--alist-get 'reviewDecision data)))
-         (comments (gh-core--alist-get 'comments data))
-         (comment-count
-          (or (gh-core--alist-get 'commentsCount data)
-              (gh-core--alist-get 'totalCount comments)
-              (and (listp comments) (length comments)) 0)))
+  (let* ((repository (alist-get 'repository data))
+         (name (alist-get 'nameWithOwner repository))
+         (context (gh-context-from-repository name (gh-context-host base)))
+         (resource (gh-resource-create
+                    kind context :number (alist-get 'number data)
+                    :title (alist-get 'title data)
+                    :url (alist-get 'url data) :data data))
+         (state (alist-get 'state data))
+         (author (gh-core--name (alist-get 'author data)))
+         (comment-count (gh-core--comments-count data)))
     (gh-ui--section (topic (list kind (plist-get resource :repository)
                                  (plist-get resource :number)) resource t)
       (gh-ui--row
@@ -67,21 +42,14 @@
                       'gh-resource-number)
        (gh-ui--styled (plist-get resource :title) 'gh-resource-title)
        (gh-ui--styled author 'gh-author)
-       (and review (gh-ui--styled review (gh-core--state-face review)))
        (gh-ui--styled
-        (gh-core--date (gh-core--alist-get 'updatedAt data)) 'gh-date))
-      (when (eq kind 'pr)
-        (gh-ui--insert-header
-         "Branches" (format "%s → %s"
-                            (or (gh-core--alist-get 'headRefName data) "")
-                            (or (gh-core--alist-get 'baseRefName data) ""))
-         'gh-branch))
+        (gh-core--date (alist-get 'updatedAt data)) 'gh-date))
       (gh-ui--insert-header "Labels"
-                            (gh-core--names (gh-core--alist-get 'labels data))
+                            (gh-core--names (alist-get 'labels data))
                             'gh-label)
       (when (eq kind 'issue)
         (gh-ui--insert-header
-         "Assigned" (gh-core--names (gh-core--alist-get 'assignees data))
+         "Assigned" (gh-core--names (alist-get 'assignees data))
          'gh-author))
       (gh-ui--insert-header "Comments" comment-count))))
 
@@ -107,11 +75,11 @@
                           (gh-api--user-repositories context nil ok fail force 10))))
    success error))
 
-(defun gh-pages--insert-notification (base data index)
-  "Insert notification summary DATA at INDEX without marking it read."
+(defun gh-pages--insert-notification (base data)
+  "Insert notification summary DATA without marking it read."
   (let* ((notification (gh-candidate--notification-resource base data))
          (resource (plist-get notification :subject-resource)))
-    (gh-ui--section (notification (or (plist-get notification :id) index)
+    (gh-ui--section (notification (plist-get notification :id)
                                    resource t)
       (gh-ui--row
        (gh-ui--styled (if (plist-get notification :unread) "unread" "read")
@@ -129,11 +97,10 @@
 
 (defun gh-pages--repo-resource (base data)
   "Create repository resource from DATA."
-  (let* ((name (or (gh-core--alist-get 'nameWithOwner data)
-                   (gh-core--alist-get 'fullName data)))
+  (let* ((name (alist-get 'nameWithOwner data))
          (context (gh-context-from-repository name (gh-context-host base))))
     (gh-resource-create 'repository context :name name :title name
-                        :url (gh-core--alist-get 'url data) :data data)))
+                        :url (alist-get 'url data) :data data)))
 
 (defun gh-pages--render-user-status (context result)
   "Render current account status RESULT."
@@ -144,26 +111,26 @@
          (assigned-prs (alist-get 'assigned-prs result))
          (my-prs (alist-get 'my-prs result))
          (repositories (alist-get 'repositories result))
-         (login (gh-core--alist-get 'login user))
+         (login (alist-get 'login user))
          (user-resource (gh-resource-create 'user context :login login
                                             :title login
-                                            :url (gh-core--alist-get 'html_url user))))
+                                            :url (alist-get 'html_url user))))
     (gh-ui--insert-header
-     "User" (format "%s (@%s)" (or (gh-core--alist-get 'name user) login) login)
+     "User" (format "%s (@%s)" (or (alist-get 'name user) login) login)
      'gh-author user-resource)
-    (gh-ui--insert-header "Company" (gh-core--alist-get 'company user))
-    (gh-ui--insert-header "Location" (gh-core--alist-get 'location user))
+    (gh-ui--insert-header "Company" (alist-get 'company user))
+    (gh-ui--insert-header "Location" (alist-get 'location user))
     (gh-ui--insert-header
      "Follows" (format "%s followers, %s following"
-                       (or (gh-core--alist-get 'followers user) 0)
-                       (or (gh-core--alist-get 'following user) 0)))
-    (gh-ui--insert-header "Bio" (gh-core--alist-get 'bio user))
+                       (alist-get 'followers user)
+                       (alist-get 'following user)))
+    (gh-ui--insert-header "Bio" (alist-get 'bio user))
     (insert "\n")
     (gh-ui--section (notifications 'notifications
                                    (gh-resource-create 'notification-list context) t)
       (format "Notifications (%d)" (length notifications))
-      (cl-loop for item in notifications for index from 1
-               do (gh-pages--insert-notification context item index)))
+      (dolist (item notifications)
+        (gh-pages--insert-notification context item)))
     (gh-ui--section (status 'status nil nil)
       "Status"
       (gh-ui--section (review-requests 'review-requests nil nil)
@@ -185,19 +152,16 @@
           (gh-ui--section (repository (plist-get resource :repository) resource t)
             (gh-ui--row
              (gh-ui--styled
-              (downcase (format "%s"
-                                (or (gh-core--alist-get 'visibility repo)
-                                    "public")))
+              (downcase (alist-get 'visibility repo))
               'gh-permission)
              (gh-ui--styled (plist-get resource :repository) 'gh-repository)
-             (gh-ui--styled (gh-core--alist-get 'viewerPermission repo)
+             (gh-ui--styled (alist-get 'viewerPermission repo)
                             'gh-permission)
              (gh-ui--styled
-              (gh-core--date (or (gh-core--alist-get 'updatedAt repo)
-                                 (gh-core--alist-get 'pushedAt repo)))
+              (gh-core--date (alist-get 'updatedAt repo))
               'gh-date))
             (gh-ui--insert-markdown
-             (or (gh-core--alist-get 'description repo) "") context)))))))
+             (or (alist-get 'description repo) "") context)))))))
 
 (defun gh-pages--setup-user-status ()
   "Install User Status bindings."
@@ -243,11 +207,11 @@
         (issues (alist-get 'issues result))
         (prs (alist-get 'prs result)))
     (gh-ui--insert-header "User" (format "%s (@%s)"
-                                         (or (gh-core--alist-get 'name user) login)
+                                         (or (alist-get 'name user) login)
                                          login) 'gh-author)
-    (gh-ui--insert-header "Bio" (gh-core--alist-get 'bio user))
-    (gh-ui--insert-header "Company" (gh-core--alist-get 'company user))
-    (gh-ui--insert-header "Location" (gh-core--alist-get 'location user))
+    (gh-ui--insert-header "Bio" (alist-get 'bio user))
+    (gh-ui--insert-header "Company" (alist-get 'company user))
+    (gh-ui--insert-header "Location" (alist-get 'location user))
     (insert "\n")
     (gh-ui--section (repositories 'repositories nil nil)
       (format "Repositories (%d)" (length repositories))
@@ -256,7 +220,7 @@
           (gh-ui--insert-resource-line
            (gh-ui--row
             (gh-ui--styled (plist-get resource :repository) 'gh-repository)
-            (gh-core--alist-get 'description repo))
+            (alist-get 'description repo))
            resource))))
     (gh-ui--section (issues 'issues nil t)
       (format "Issues (%d)" (length issues))
@@ -282,11 +246,11 @@
 
 (defun gh-pages--gist-resource (context data)
   "Create Gist resource from DATA."
-  (let ((id (gh-core--alist-get 'id data)))
+  (let ((id (alist-get 'id data)))
     (gh-resource-create
      'gist context :id id
-     :title (or (gh-core--alist-get 'description data) id)
-     :url (gh-core--alist-get 'html_url data) :data data)))
+     :title (or (alist-get 'description data) id)
+     :url (alist-get 'html_url data) :data data)))
 
 (defun gh-pages--render-gists (context data)
   "Render Gist list DATA."
@@ -298,11 +262,11 @@
             (gh-ui--styled (gh-resource-title resource) 'gh-resource-title)
             (gh-ui--insert-header "ID" (plist-get resource :id))
             (gh-ui--insert-header "Visibility"
-                                  (if (gh-core--alist-get 'public gist)
+                                  (if (alist-get 'public gist)
                                       "public" "secret")
                                   'gh-permission)
             (gh-ui--insert-header
-             "Updated" (gh-core--date (gh-core--alist-get 'updated_at gist))
+             "Updated" (gh-core--date (alist-get 'updated_at gist))
              'gh-date))))
     (insert (propertize "No gists found.\n" 'font-lock-face 'shadow))))
 
@@ -318,34 +282,28 @@
      (lambda (data) (gh-pages--render-gists context data)))))
 
 (defun gh-pages--gist-files (data)
-  "Return normalized file alists from Gist DATA."
-  (let ((files (gh-core--alist-get 'files data)))
-    (mapcar
-     (lambda (entry)
-       (let ((file (cdr entry)))
-         (if (gh-core--alist-get 'filename file) file
-           (cons (cons 'filename (symbol-name (car entry))) file))))
-     files)))
+  "Return file alists from Gist DATA."
+  (mapcar #'cdr (alist-get 'files data)))
 
 (defun gh-pages--gist-file-resource (context id file data)
   "Create Gist file resource."
   (gh-resource-create
-   'gist-file context :id id :path (gh-core--alist-get 'filename file)
-   :title (gh-core--alist-get 'filename file)
-   :url (gh-core--alist-get 'html_url data) :data file))
+   'gist-file context :id id :path (alist-get 'filename file)
+   :title (alist-get 'filename file)
+   :url (alist-get 'html_url data) :data file))
 
 (defun gh-pages--render-gist (context data)
   "Render Gist DATA."
-  (let ((id (gh-core--alist-get 'id data)))
-    (insert (propertize (or (gh-core--alist-get 'description data) id)
+  (let ((id (alist-get 'id data)))
+    (insert (propertize (or (alist-get 'description data) id)
                         'font-lock-face 'gh-resource-title) "\n\n")
     (dolist (file (gh-pages--gist-files data))
       (let ((resource (gh-pages--gist-file-resource context id file data)))
         (gh-ui--section (gist-file (plist-get resource :path) resource nil)
           (gh-ui--styled (plist-get resource :path) 'gh-file)
-          (gh-ui--insert-header "Language" (gh-core--alist-get 'language file))
-          (gh-ui--insert-header "Size" (gh-core--alist-get 'size file))
-          (insert (or (gh-core--alist-get 'content file)
+          (gh-ui--insert-header "Language" (alist-get 'language file))
+          (gh-ui--insert-header "Size" (alist-get 'size file))
+          (insert (or (alist-get 'content file)
                       "Content is truncated; press RET to open the file.") "\n"))))))
 
 (defun gh-gist-view (id &optional context preview)
@@ -376,9 +334,9 @@
        (lambda (data)
          (let* ((file (cl-find path (gh-pages--gist-files data)
                                :key (lambda (item)
-                                      (gh-core--alist-get 'filename item))
+                                      (alist-get 'filename item))
                                :test #'string=))
-                (content (or (gh-core--alist-get 'content file) ""))
+                (content (or (alist-get 'content file) ""))
                 (inhibit-read-only t))
            (erase-buffer) (insert content)
            (goto-char (point-min))

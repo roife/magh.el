@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -14,7 +14,6 @@
 
 ;;; Code:
 
-(require 'base64)
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
@@ -46,33 +45,27 @@
 (defun gh-pr--resource (context data)
   "Create Pull Request resource from DATA in CONTEXT."
   (gh-resource-create
-   'pr context :number (gh-core--alist-get 'number data)
-   :title (gh-core--alist-get 'title data)
-   :url (or (gh-core--alist-get 'url data)
-            (gh-context-web-url
-             context (format "pull/%s" (gh-core--alist-get 'number data))))
-   :head-ref (gh-core--alist-get 'headRefName data)
-   :head-sha (gh-core--alist-get 'headRefOid data)
-   :base-ref (gh-core--alist-get 'baseRefName data)
-   :data data))
+   'pr context :number (alist-get 'number data)
+   :title (alist-get 'title data)
+   :url (alist-get 'url data)))
 
 (defun gh-pr--row-values (data)
   "Return compact row values for Pull Request DATA."
-  (let ((state (if (gh-core--alist-get 'isDraft data)
-                   "DRAFT" (or (gh-core--alist-get 'state data) "")))
-        (review (gh-core--alist-get 'reviewDecision data)))
+  (let ((state (if (alist-get 'isDraft data)
+                   "DRAFT" (alist-get 'state data)))
+        (review (alist-get 'reviewDecision data)))
     (list :state (gh-ui--styled (upcase state) (gh-core--state-face state))
           :identifier (gh-ui--styled
-                       (format "#%s" (gh-core--alist-get 'number data))
+                       (format "#%s" (alist-get 'number data))
                        'gh-resource-number)
-          :title (gh-ui--styled (gh-core--alist-get 'title data)
+          :title (gh-ui--styled (alist-get 'title data)
                                 'gh-resource-title)
           :author (gh-ui--styled
-                   (gh-core--name (gh-core--alist-get 'author data))
+                   (gh-core--name (alist-get 'author data))
                    'gh-author)
           :review (gh-ui--styled review (gh-core--state-face review))
           :updated (gh-ui--styled
-                    (gh-core--date (gh-core--alist-get 'updatedAt data))
+                    (gh-core--date (alist-get 'updatedAt data))
                     'gh-date))))
 
 (defun gh-pr--insert-row (context data)
@@ -83,20 +76,20 @@
       (gh-ui--format-row (gh-pr--row-values data))
       (gh-ui--insert-header
        "Branches" (format "%s → %s"
-                          (or (gh-core--alist-get 'headRefName data) "")
-                          (or (gh-core--alist-get 'baseRefName data) ""))
+                          (alist-get 'headRefName data)
+                          (alist-get 'baseRefName data))
        'gh-branch)
       (gh-ui--insert-header "Review"
-                            (or (gh-core--alist-get 'reviewDecision data) "—")
+                            (or (alist-get 'reviewDecision data) "—")
                             (gh-core--state-face
-                             (gh-core--alist-get 'reviewDecision data)))
+                             (alist-get 'reviewDecision data)))
       (gh-ui--insert-header "Labels"
-                            (gh-core--names (gh-core--alist-get 'labels data))
+                            (gh-core--names (alist-get 'labels data))
                             'gh-label)
       (gh-ui--insert-header "Comments"
-                            (length (or (gh-core--alist-get 'comments data) nil)))
+                            (gh-core--comments-count data))
       (gh-ui--insert-header "Created"
-                            (gh-core--date (gh-core--alist-get 'createdAt data))
+                            (gh-core--date (alist-get 'createdAt data))
                             'gh-date))))
 
 (defun gh-pr--render-list (context state data)
@@ -113,19 +106,12 @@
     (format "Load more (current limit %d)" gh-pr--limit)
     (insert "Press RET to double the list limit.\n")))
 
-(defun gh-pr--setup-list (context)
-  "Install Pull Request list bindings for CONTEXT."
-  (local-set-key (kbd "c") (lambda () (interactive) (gh-pr-create context)))
-  (local-set-key (kbd "t") #'gh-pr-cycle-state)
-  (setq gh-buffer-dispatch-function #'gh-pr-dispatch))
-
 ;;;###autoload
 (defun gh-pr-list (&optional context state params)
   "Open Pull Request list for CONTEXT, STATE, and PARAMS."
   (interactive)
   (setq context (gh-pr--context context)
-        state (or state gh-default-pr-state)
-        params (copy-sequence params))
+        state (or state gh-default-pr-state))
   (let ((limit (or (plist-get params :limit) gh-list-limit)))
     (gh-ui--open-page
      (gh-pr--buffer-name context nil state) context 'pr-list state
@@ -133,9 +119,13 @@
        (gh-api--pr-list context (append (list :state state :limit limit) params)
                         success error force))
      (lambda (data) (gh-pr--render-list context state data))
-     :setup (lambda ()
-              (setq gh-pr--state state gh-pr--params params gh-pr--limit limit)
-              (gh-pr--setup-list context)))))
+     :setup
+     (lambda ()
+       (setq gh-pr--state state gh-pr--params params gh-pr--limit limit)
+       (local-set-key (kbd "c")
+                      (lambda () (interactive) (gh-pr-create context)))
+       (local-set-key (kbd "t") #'gh-pr-cycle-state)
+       (setq gh-buffer-dispatch-function #'gh-pr-dispatch)))))
 
 (defun gh-pr-load-more ()
   "Double current Pull Request list limit and refresh."
@@ -180,97 +170,86 @@
 
 (defun gh-pr--commit-resource (context commit)
   "Create Commit resource from COMMIT in CONTEXT."
-  (let ((sha (or (gh-core--alist-get 'sha commit)
-                 (gh-core--alist-get 'oid commit))))
-    (gh-resource-create
-     'commit context :sha sha
-     :title (or (gh-core--alist-get
-                 'message (gh-core--alist-get 'commit commit))
-                (gh-core--alist-get 'messageHeadline commit))
-     :url (or (gh-core--alist-get 'html_url commit)
-              (gh-context-web-url context (format "commit/%s" sha)))
-     :data commit)))
+  (gh-resource-create
+   'commit context :sha (alist-get 'sha commit)
+   :title (alist-get 'message (alist-get 'commit commit))
+   :url (alist-get 'html_url commit)
+   :data commit))
 
 (defun gh-pr--file-resource (context file head-ref)
   "Create remote file resource for FILE at HEAD-REF."
-  (let ((path (gh-core--alist-get 'filename file)))
+  (let ((path (alist-get 'filename file)))
     (gh-resource-create
      'file (gh-context-copy context :ref head-ref :path path)
      :path path :ref head-ref
-     :fragment (or (gh-core--alist-get 'changes file) 0)
-     :url (gh-core--alist-get 'blob_url file) :data file)))
+     :url (alist-get 'blob_url file))))
 
 (defun gh-pr--check-resource (context check)
   "Create Run or web CHECK resource."
-  (let ((url (or (gh-core--alist-get 'detailsUrl check)
-                 (gh-core--alist-get 'targetUrl check))))
+  (let ((name (or (alist-get 'name check) (alist-get 'context check)))
+        (url (or (alist-get 'detailsUrl check)
+                 (alist-get 'targetUrl check))))
     (if (and url (string-match "/actions/runs/\\([0-9]+\\)" url))
         (gh-resource-create
          'run context :id (string-to-number (match-string 1 url))
-         :title (gh-core--alist-get 'name check) :url url :data check)
+         :title name :url url)
       (gh-resource-create
-       'check context :title (gh-core--alist-get 'name check) :url url
-       :data check))))
+       'check context :title name :url url))))
 
 (defun gh-pr--conversation-items (pr inline-comments)
   "Return sorted conversation items from PR and INLINE-COMMENTS."
   (sort
    (append
     (mapcar (lambda (item) (cons 'comment item))
-            (or (gh-core--alist-get 'comments pr) nil))
+            (alist-get 'comments pr))
     (mapcar (lambda (item) (cons 'review item))
-            (or (gh-core--alist-get 'reviews pr) nil))
+            (alist-get 'reviews pr))
     (mapcar (lambda (item) (cons 'inline item)) inline-comments))
    (lambda (a b)
-     (string< (or (gh-core--alist-get 'createdAt (cdr a))
-                  (gh-core--alist-get 'submittedAt (cdr a))
-                  (gh-core--alist-get 'created_at (cdr a)) "")
-              (or (gh-core--alist-get 'createdAt (cdr b))
-                  (gh-core--alist-get 'submittedAt (cdr b))
-                  (gh-core--alist-get 'created_at (cdr b)) "")))))
+     (string< (or (alist-get 'createdAt (cdr a))
+                  (alist-get 'submittedAt (cdr a))
+                  (alist-get 'created_at (cdr a)) "")
+              (or (alist-get 'createdAt (cdr b))
+                  (alist-get 'submittedAt (cdr b))
+                  (alist-get 'created_at (cdr b)) "")))))
 
-(defun gh-pr--render-conversation (context number items head-ref)
+(defun gh-pr--render-conversation (context items head-ref)
   "Render Pull Request conversation ITEMS."
   (gh-ui--section (conversation 'conversation nil nil)
     (format "Conversation (%d)" (length items))
-    (cl-loop for item in items
-             for index from 1
-             do
-             (pcase-let* ((`(,kind . ,data) item)
-                          (author (gh-core--name
-                                   (or (gh-core--alist-get 'author data)
-                                       (gh-core--alist-get 'user data))))
-                          (date (gh-core--date
-                                 (or (gh-core--alist-get 'createdAt data)
-                                     (gh-core--alist-get 'submittedAt data)
-                                     (gh-core--alist-get 'created_at data))))
-                          (state (gh-core--alist-get 'state data))
-                          (path (gh-core--alist-get 'path data))
-                          (line (or (gh-core--alist-get 'line data)
-                                    (gh-core--alist-get 'original_line data)))
-                          (resource
-                           (if path
-                               (gh-resource-create
-                                'file (gh-context-copy context :ref head-ref :path path)
-                                :path path :ref head-ref :line line
-                                :pr-number number :data data)
-                             (gh-resource-create 'comment context :id index
-                                                 :data data))))
-               (gh-ui--section
-                   (comment (or (gh-core--alist-get 'id data) index) resource nil)
-                 (concat
-                  (pcase kind ('review "Review") ('inline "Inline comment")
-                    (_ "Comment"))
-                  " by " (or (gh-ui--styled author 'gh-author) "")
-                  (if state
-                      (concat " " (gh-ui--styled
-                                    state (gh-core--state-face state))) "")
-                  " · " (or (gh-ui--styled date 'gh-date) ""))
-                 (when path
-                   (gh-ui--insert-header "Location" (format "%s:%s" path line)
-                                         'gh-file resource))
-                 (gh-ui--insert-markdown
-                  (or (gh-core--alist-get 'body data) "") context))))))
+    (dolist (item items)
+      (pcase-let* ((`(,kind . ,data) item)
+                   (id (alist-get 'id data))
+                   (author (gh-core--name
+                            (or (alist-get 'author data)
+                                (alist-get 'user data))))
+                   (date (gh-core--date
+                          (or (alist-get 'createdAt data)
+                              (alist-get 'submittedAt data)
+                              (alist-get 'created_at data))))
+                   (state (alist-get 'state data))
+                   (path (alist-get 'path data))
+                   (line (or (alist-get 'line data)
+                             (alist-get 'original_line data)))
+                   (resource
+                    (if path
+                        (gh-resource-create
+                         'file (gh-context-copy context :ref head-ref :path path)
+                         :path path :ref head-ref :line line)
+                      (gh-resource-create 'comment context :id id))))
+        (gh-ui--section (comment id resource nil)
+          (concat
+           (pcase kind ('review "Review") ('inline "Inline comment")
+             (_ "Comment"))
+           " by " (or (gh-ui--styled author 'gh-author) "")
+           (if state
+               (concat " " (gh-ui--styled
+                             state (gh-core--state-face state))) "")
+           " · " (or (gh-ui--styled date 'gh-date) ""))
+          (when path
+            (gh-ui--insert-header "Location" (format "%s:%s" path line)
+                                  'gh-file resource))
+          (gh-ui--insert-markdown (alist-get 'body data) context))))))
 
 (defun gh-pr--render-view (context result)
   "Render Pull Request detail RESULT in CONTEXT."
@@ -278,36 +257,35 @@
          (commits (alist-get 'commits result))
          (files (alist-get 'files result))
          (inline-comments (alist-get 'review-comments result))
-         (checks (or (gh-core--alist-get 'statusCheckRollup pr) nil))
+         (checks (alist-get 'statusCheckRollup pr))
          (resource (gh-pr--resource context pr))
-         (number (gh-core--alist-get 'number pr))
-         (head-ref (gh-core--alist-get 'headRefName pr))
-         (base-ref (gh-core--alist-get 'baseRefName pr))
-         (state (if (gh-core--alist-get 'isDraft pr)
-                    "DRAFT" (gh-core--alist-get 'state pr))))
+         (number (alist-get 'number pr))
+         (head-ref (alist-get 'headRefName pr))
+         (base-ref (alist-get 'baseRefName pr))
+         (state (if (alist-get 'isDraft pr)
+                    "DRAFT" (alist-get 'state pr))))
     (insert (propertize (format "#%s  " number)
                         'font-lock-face 'gh-resource-number)
-            (propertize (or (gh-core--alist-get 'title pr) "")
+            (propertize (alist-get 'title pr)
                         'font-lock-face 'gh-resource-title) "\n")
     (add-text-properties (line-beginning-position 0) (point)
                          (list 'gh-resource resource))
     (gh-ui--insert-header "State" state (gh-core--state-face state))
     (gh-ui--insert-header "Author"
-                          (gh-core--name (gh-core--alist-get 'author pr))
+                          (gh-core--name (alist-get 'author pr))
                           'gh-author)
     (gh-ui--insert-header "Branches" (format "%s → %s" head-ref base-ref)
                           'gh-branch)
-    (let ((review (gh-core--alist-get 'reviewDecision pr)))
+    (let ((review (alist-get 'reviewDecision pr)))
       (gh-ui--insert-header "Review" (or review "—")
                             (and review (gh-core--state-face review))))
     (gh-ui--insert-header "Labels"
-                          (gh-core--names (gh-core--alist-get 'labels pr))
+                          (gh-core--names (alist-get 'labels pr))
                           'gh-label)
     (insert "\n")
     (gh-ui--section (description 'description resource nil)
       "Description"
-      (gh-ui--insert-markdown (or (gh-core--alist-get 'body pr)
-                                  "No description.") context))
+      (gh-ui--insert-markdown (alist-get 'body pr) context))
     (gh-ui--section (commits 'commits
                              (gh-resource-create 'pr-commits context
                                                  :number number) nil)
@@ -315,54 +293,48 @@
       (dolist (commit commits)
         (let* ((commit-resource (gh-pr--commit-resource context commit))
                (sha (plist-get commit-resource :sha))
-               (commit-data (gh-core--alist-get 'commit commit))
-               (message (or (gh-core--alist-get 'messageHeadline commit)
-                            (car (split-string
-                                  (or (gh-core--alist-get 'message commit-data) "")
-                                  "\n"))))
-               (author (or (gh-core--name (gh-core--alist-get 'author commit))
-                           (gh-core--name (gh-core--alist-get 'author commit-data)))))
+               (commit-data (alist-get 'commit commit))
+               (message (car (split-string
+                              (alist-get 'message commit-data) "\n")))
+               (author (or (gh-core--name (alist-get 'author commit))
+                           (gh-core--name (alist-get 'author commit-data)))))
           (gh-ui--section (commit sha commit-resource t)
             (gh-ui--row
-             (gh-ui--styled (substring sha 0 (min 10 (length sha))) 'gh-hash)
+             (gh-ui--styled (substring sha 0 10) 'gh-hash)
              (gh-ui--styled message 'gh-resource-title))
             (gh-ui--insert-header "Author" author 'gh-author)
             (gh-ui--insert-header
              "Committed" (gh-core--date
-                           (or (gh-core--alist-get 'committedDate commit)
-                               (gh-core--alist-get 'date
-                                                   (gh-core--alist-get
-                                                    'committer commit-data))))
+                           (alist-get 'date (alist-get 'committer commit-data)))
              'gh-date)))))
     (gh-ui--section (files 'files
                            (gh-resource-create 'pr-files context :number number) nil)
       (format "Files (%d)" (length files))
       (dolist (file files)
         (let ((file-resource (gh-pr--file-resource context file head-ref)))
-          (gh-ui--section (file (gh-core--alist-get 'filename file)
+          (gh-ui--section (file (alist-get 'filename file)
                                 file-resource t)
             (gh-ui--row
-             (gh-ui--styled (gh-core--alist-get 'filename file) 'gh-file)
+             (gh-ui--styled (alist-get 'filename file) 'gh-file)
              (gh-ui--styled
-              (format "+%s" (or (gh-core--alist-get 'additions file) 0))
+              (format "+%s" (alist-get 'additions file))
               'gh-added)
              (gh-ui--styled
-              (format "-%s" (or (gh-core--alist-get 'deletions file) 0))
+              (format "-%s" (alist-get 'deletions file))
               'gh-removed))))))
     (gh-ui--section (checks 'checks nil nil)
       (format "Checks (%d)" (length checks))
       (dolist (check checks)
         (let* ((check-resource (gh-pr--check-resource context check))
-               (status (or (gh-core--alist-get 'conclusion check)
-                           (gh-core--alist-get 'status check) ""))
-               (name (or (gh-core--alist-get 'name check)
-                         (gh-core--alist-get 'context check) "check")))
+               (status (or (alist-get 'conclusion check)
+                           (alist-get 'status check)))
+               (name (gh-resource-title check-resource)))
           (gh-ui--section (check name check-resource t)
             (gh-ui--row
              (gh-ui--styled (upcase status) (gh-core--state-face status))
              (gh-ui--styled name 'gh-workflow))))))
     (gh-pr--render-conversation
-     context number (gh-pr--conversation-items pr inline-comments) head-ref)))
+     context (gh-pr--conversation-items pr inline-comments) head-ref)))
 
 (defun gh-pr--setup-view (context number)
   "Install detail keys for Pull Request NUMBER in CONTEXT."
@@ -407,24 +379,19 @@
     (gh-api--pr-commits
      context number
      (lambda (commits)
-       (let* ((resources (mapcar (lambda (commit)
-                                   (gh-pr--commit-resource context commit))
-                                 commits))
-              (resource
-               (gh-candidate-read
-                "Commit: " resources :category 'gh-commit :preview t
-                :formatter
-                (lambda (item)
-                  (let* ((data (plist-get item :data))
-                         (commit (gh-core--alist-get 'commit data))
-                         (message (car (split-string
-                                       (or (gh-core--alist-get 'message commit)
-                                           (plist-get item :title) "") "\n"))))
-                    (gh-ui--row
-                     (gh-ui--styled (substring (plist-get item :sha) 0 10)
-                                    'gh-hash)
-                     (gh-ui--styled message 'gh-resource-title)))))))
-         (when resource (gh-resource-open resource))))
+       (gh-candidate-select-and-open
+        "Commit: "
+        (mapcar (lambda (commit) (gh-pr--commit-resource context commit))
+                commits)
+        (lambda (item)
+          (let ((message
+                 (alist-get 'message
+                            (alist-get 'commit (plist-get item :data)))))
+            (gh-ui--row
+             (gh-ui--styled (substring (plist-get item :sha) 0 10) 'gh-hash)
+             (gh-ui--styled (car (split-string message "\n"))
+                            'gh-resource-title))))
+        t))
      #'gh-core--user-error)))
 
 (defun gh-pr--render-files (context number result)
@@ -432,45 +399,44 @@
   (let* ((pr (alist-get 'pr result))
          (files (alist-get 'files result))
          (comments (alist-get 'review-comments result))
-         (head-ref (gh-core--alist-get 'headRefName pr)))
+         (head-ref (alist-get 'headRefName pr)))
     (gh-ui--insert-header "Repository" (gh-context-repository context)
                           'gh-repository)
     (gh-ui--insert-header "Pull Request" (format "#%s changed files" number))
     (insert "\n")
     (dolist (file files)
-      (let* ((path (gh-core--alist-get 'filename file))
+      (let* ((path (alist-get 'filename file))
              (resource (gh-pr--file-resource context file head-ref))
              (file-comments
               (seq-filter (lambda (comment)
-                            (equal (gh-core--alist-get 'path comment) path))
+                            (equal (alist-get 'path comment) path))
                           comments)))
         (gh-ui--section (file path resource nil)
           (gh-ui--row
            (gh-ui--styled path 'gh-file)
            (gh-ui--styled
-            (format "+%s" (or (gh-core--alist-get 'additions file) 0))
+            (format "+%s" (alist-get 'additions file))
             'gh-added)
            (gh-ui--styled
-            (format "-%s" (or (gh-core--alist-get 'deletions file) 0))
+            (format "-%s" (alist-get 'deletions file))
             'gh-removed))
-          (if-let* ((patch (gh-core--alist-get 'patch file)))
+          (if-let* ((patch (alist-get 'patch file)))
               (gh-ui--insert-diff patch)
             (insert (propertize "Binary or oversized diff unavailable.\n"
                                 'font-lock-face 'shadow)))
           (dolist (comment file-comments)
-            (let ((line (or (gh-core--alist-get 'line comment)
-                            (gh-core--alist-get 'original_line comment))))
+            (let ((line (or (alist-get 'line comment)
+                            (alist-get 'original_line comment))))
               (gh-ui--section (inline-comment
-                               (gh-core--alist-get 'id comment) resource nil)
+                               (alist-get 'id comment) resource nil)
                 (gh-ui--row
                  "Inline comment by"
                  (gh-ui--styled
-                  (gh-core--name (or (gh-core--alist-get 'user comment)
-                                     (gh-core--alist-get 'author comment)))
+                  (gh-core--name (alist-get 'user comment))
                   'gh-author)
                  (gh-ui--styled (format "line %s" line) 'gh-permission))
                 (gh-ui--insert-markdown
-                 (or (gh-core--alist-get 'body comment) "") context)))))))))
+                 (alist-get 'body comment) context)))))))))
 
 ;;;###autoload
 (defun gh-pr-view-files (&optional context number)
@@ -530,18 +496,10 @@
 
 ;;; Template and structured editing
 
-(defun gh-pr--decode-content (data)
-  "Decode GitHub content DATA as UTF-8 text."
-  (decode-coding-string
-   (base64-decode-string
-    (replace-regexp-in-string "\n" "" (or (gh-core--alist-get 'content data) "")))
-   'utf-8))
-
 ;;;###autoload
-(defun gh-pr-template-read (context callback &optional errback)
+(defun gh-pr-template-read (context callback)
   "Asynchronously read a Pull Request template in CONTEXT.
-CALLBACK receives template text; ERRBACK receives a typed error only after all
-supported template locations fail."
+CALLBACK receives template text, or an empty string when no template exists."
   (setq context (gh-pr--context context))
   (let ((paths '("pull_request_template.md"
                  ".github/pull_request_template.md"
@@ -551,37 +509,37 @@ supported template locations fail."
            (if-let* ((path (car remaining)))
                (gh-api--content-get
                 context path (gh-context-ref context)
-                (lambda (data) (funcall callback (gh-pr--decode-content data)))
+                (lambda (data) (funcall callback (gh-api--decode-content data)))
                 (lambda (_error) (try (cdr remaining))))
              (gh-api--content-list
               context ".github/PULL_REQUEST_TEMPLATE" (gh-context-ref context)
               (lambda (items)
                 (let* ((files (seq-filter
                                (lambda (item)
-                                 (string-match-p
-                                  "\\.md\\'" (or (gh-core--alist-get 'name item) "")))
+                                 (string-suffix-p
+                                  ".md" (alist-get 'name item)))
                                items))
                        (choice
                         (and files
                              (completing-read
                               "Pull Request template: "
                               (mapcar (lambda (item)
-                                        (gh-core--alist-get 'name item)) files)
+                                        (alist-get 'name item)) files)
                               nil t))))
                   (if choice
-                      (let ((item (cl-find
-                                   choice files
-                                   :key (lambda (entry)
-                                          (gh-core--alist-get 'name entry))
-                                   :test #'string=)))
+                      (let ((item
+                             (seq-find
+                              (lambda (entry)
+                                (string= choice (alist-get 'name entry)))
+                              files)))
                         (gh-api--content-get
-                         context (gh-core--alist-get 'path item)
+                         context (alist-get 'path item)
                          (gh-context-ref context)
                          (lambda (data)
-                           (funcall callback (gh-pr--decode-content data)))
-                         (or errback (lambda (_error) (funcall callback "")))))
+                           (funcall callback (gh-api--decode-content data)))
+                         (lambda (_error) (funcall callback ""))))
                     (funcall callback ""))))
-              (or errback (lambda (_error) (funcall callback "")))))))
+              (lambda (_error) (funcall callback ""))))))
       (try paths))))
 
 (defun gh-pr--completion-fetchers (context)
@@ -592,10 +550,8 @@ supported template locations fail."
              (funcall api context
                       (lambda (items)
                         (funcall success
-                                 (delq nil
-                                       (mapcar (lambda (item)
-                                                 (gh-core--alist-get key item))
-                                               items))))
+                                 (mapcar (lambda (item) (alist-get key item))
+                                         items)))
                       error)))))
     (list :users (funcall names #'gh-api--repo-collaborators 'login)
           :labels (funcall names #'gh-api--repo-labels 'name)
@@ -629,7 +585,6 @@ supported template locations fail."
    (lambda (template)
      (gh-edit-open
       (format "*gh: %s · New Pull Request*" (gh-context-repository context))
-      context (gh-resource-create 'pr context)
       (gh-pr--editor-fields context t)
       (list :base (or (gh-context-default-branch context) "main")
             :head (or (gh-context-branch context) "") :draft :json-false)
@@ -639,27 +594,26 @@ supported template locations fail."
       :after-success
       (lambda (result)
         (when (string-match "/pull/\\([0-9]+\\)" result)
-          (gh-pr-view (string-to-number (match-string 1 result)) context)))))
-   nil))
+          (gh-pr-view (string-to-number (match-string 1 result)) context)))))))
 
 (defun gh-pr--edit-values (data)
   "Convert Pull Request DATA to editor values."
-  (list :title (gh-core--alist-get 'title data)
-        :base (gh-core--alist-get 'baseRefName data)
+  (list :title (alist-get 'title data)
+        :base (alist-get 'baseRefName data)
         :reviewers (mapcar #'gh-core--name
-                           (gh-core--alist-get 'reviewRequests data))
-        :assignees (mapcar #'gh-core--name (gh-core--alist-get 'assignees data))
-        :labels (mapcar #'gh-core--name (gh-core--alist-get 'labels data))
-        :milestone (gh-core--name (gh-core--alist-get 'milestone data))
-        :projects (mapcar #'gh-core--name (gh-core--alist-get 'projectItems data))))
+                           (alist-get 'reviewRequests data))
+        :assignees (mapcar #'gh-core--name (alist-get 'assignees data))
+        :labels (mapcar #'gh-core--name (alist-get 'labels data))
+        :milestone (gh-core--name (alist-get 'milestone data))
+        :projects (mapcar #'gh-core--name (alist-get 'projectItems data))))
 
 (defun gh-pr--open-edit-editor (context number data)
   "Open structured editor for Pull Request NUMBER using DATA."
   (let ((original (gh-pr--edit-values data)))
     (gh-edit-open
      (format "*gh: %s · Edit PR #%s*" (gh-context-repository context) number)
-     context (gh-pr--resource context data) (gh-pr--editor-fields context)
-     original (or (gh-core--alist-get 'body data) "")
+     (gh-pr--editor-fields context)
+     original (alist-get 'body data)
      (lambda (values body success error)
        (let ((changes (list :title (plist-get values :title)
                             :base (plist-get values :base)
@@ -674,8 +628,7 @@ supported template locations fail."
                                       (seq-difference new old #'string=)))
              (setq changes (plist-put changes (nth 2 spec)
                                       (seq-difference old new #'string=)))))
-         (gh-api--pr-edit context number changes success error)))
-     :source-buffer (current-buffer))))
+         (gh-api--pr-edit context number changes success error))))))
 
 ;;;###autoload
 (defun gh-pr-edit (&optional context number)
@@ -684,8 +637,8 @@ supported template locations fail."
   (pcase-let ((`(,current-context ,current-number) (gh-pr--current)))
     (setq context (gh-pr--context (or context current-context))
           number (or number current-number (read-number "Pull Request number: ")))
-    (let ((pr (and (listp gh-ui--data) (alist-get 'pr gh-ui--data))))
-      (if (and pr (= (or (gh-core--alist-get 'number pr) -1) number))
+    (let ((pr (alist-get 'pr gh-ui--data)))
+      (if (equal (alist-get 'number pr) number)
           (gh-pr--open-edit-editor context number pr)
         (gh-api--pr-get
          context number (lambda (data) (gh-pr--open-edit-editor context number data))
@@ -769,8 +722,7 @@ START-LINE makes a multi-line comment; SIDE defaults to RIGHT."
   "Return (CONTEXT NUMBER) for the current Pull Request action."
   (let ((resource (or gh-pr--dispatch-resource (gh-ui-resource-at-point))))
     (list (or (plist-get resource :context) gh-buffer-context)
-          (or (plist-get resource :number) gh-pr--view-number
-              (and (eq gh-buffer-resource-kind 'pr) gh-buffer-resource-id)))))
+          (or (plist-get resource :number) gh-pr--view-number))))
 
 ;;;###autoload
 (defun gh-review-requests ()
@@ -780,32 +732,24 @@ START-LINE makes a multi-line comment; SIDE defaults to RIGHT."
     (gh-api--review-requests
      context
      (lambda (items)
-       (let* ((resources
-               (mapcar
-                (lambda (item)
-                  (let* ((repo-data (gh-core--alist-get 'repository item))
-                         (repo (or (gh-core--alist-get 'nameWithOwner repo-data)
-                                   (gh-core--alist-get 'nameWithOwner item)))
-                         (item-context (gh-context-from-repository
-                                        repo (gh-context-host context))))
-                    (gh-pr--resource item-context item)))
-                items))
-              (resource (gh-candidate-read
-                         "Review request: " resources
-                         :formatter (lambda (item)
-                                      (gh-ui--row
-                                       (concat
-                                        (or (gh-ui--styled
-                                             (plist-get item :repository)
-                                             'gh-repository) "")
-                                        (or (gh-ui--styled
-                                             (format "#%s"
-                                                     (plist-get item :number))
-                                             'gh-resource-number) ""))
-                                       (gh-ui--styled (plist-get item :title)
-                                                      'gh-resource-title)))
-                         :preview t)))
-         (when resource (gh-resource-open resource))))
+       (gh-candidate-select-and-open
+        "Review request: "
+        (mapcar
+         (lambda (item)
+           (let ((item-context
+                  (gh-context-from-repository
+                   (alist-get 'nameWithOwner (alist-get 'repository item))
+                   (gh-context-host context))))
+             (gh-pr--resource item-context item)))
+         items)
+        (lambda (item)
+          (gh-ui--row
+           (concat
+            (gh-ui--styled (plist-get item :repository) 'gh-repository)
+            (gh-ui--styled (format "#%s" (plist-get item :number))
+                           'gh-resource-number))
+           (gh-ui--styled (plist-get item :title) 'gh-resource-title)))
+        t))
      #'gh-core--user-error)))
 
 (defun gh-pr-comment (body &optional context number)
@@ -945,9 +889,9 @@ START-LINE makes a multi-line comment; SIDE defaults to RIGHT."
     (gh-api--pr-get
      context number
      (lambda (pr)
-       (let* ((body (or (gh-core--alist-get 'body pr) ""))
+       (let* ((body (alist-get 'body pr))
               (marker (format "Closes #%s" issue)))
-         (if (string-match-p (regexp-quote marker) body)
+         (if (string-search marker body)
              (message "Pull Request already contains %s" marker)
            (gh-api--pr-edit
             context number (list :body (concat (string-trim-right body)

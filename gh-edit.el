@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -26,14 +26,11 @@
 (defface gh-edit-separator '((t :inherit shadow))
   "Face for the structured editor separator." :group 'gh)
 
-(defvar-local gh-edit-context nil)
-(defvar-local gh-edit-resource nil)
 (defvar-local gh-edit-source-buffer nil)
 (defvar-local gh-edit-fields nil)
 (defvar-local gh-edit-submit-function nil)
 (defvar-local gh-edit-after-success-function nil)
 (defvar-local gh-edit-submitting nil)
-(defvar-local gh-edit-original-values nil)
 (defvar-local gh-edit--completion-values nil)
 
 (defvar-keymap gh-edit-mode-map
@@ -64,7 +61,7 @@
   (cond
    ((null value) "")
    ((plist-get definition :multiple)
-    (mapconcat (lambda (item) (format "%s" item)) value ","))
+    (mapconcat #'identity value ","))
    ((eq value t) "true")
    ((eq value :json-false) "false")
    (t (format "%s" value))))
@@ -75,11 +72,11 @@
     (cond
      ((plist-get definition :multiple)
       (if (string-empty-p text) nil
-        (mapcar #'string-trim (split-string text "," t))))
+        (split-string text "[ \t]*,[ \t]*" t)))
      ((eq (plist-get definition :type) 'boolean)
       (pcase (downcase text)
-        ((or "true" "yes" "1") t)
-        ((or "false" "no" "0" "") :json-false)
+        ("true" t)
+        ((or "false" "") :json-false)
         (_ (signal 'gh-invalid-input
                    (list (format "%s must be true or false"
                                  (gh-edit--field-name definition)))))))
@@ -92,20 +89,13 @@
                                 (gh-edit--field-name definition)))))))
      (t text))))
 
-(defun gh-edit--values-get (values name)
-  "Get NAME from plist or alist VALUES."
-  (if (keywordp (car-safe values))
-      (plist-get values (intern (format ":%s" name)))
-    (or (alist-get name values)
-        (alist-get (symbol-name name) values nil nil #'equal))))
-
 (defun gh-edit--insert-template (values body)
   "Insert editor template using VALUES and BODY."
   (let ((inhibit-read-only t))
     (erase-buffer)
     (dolist (definition gh-edit-fields)
       (let* ((name (plist-get definition :name))
-             (value (gh-edit--values-get values name)))
+             (value (plist-get values (intern (format ":%s" name)))))
         (insert (symbol-name name) ": "
                 (gh-edit--encode-value value definition) "\n")))
     (insert "---\n" (or body ""))
@@ -117,7 +107,7 @@
   "Parse current editor into (VALUES BODY)."
   (save-excursion
     (goto-char (point-min))
-    (let (values separator)
+    (let (values)
       (while (and (not (eobp)) (not (looking-at-p "^---[ \t]*$")))
         (unless (looking-at "^\\([[:alnum:]-]+\\):[ \t]*\\(.*\\)$")
           (signal 'gh-invalid-input
@@ -134,8 +124,6 @@
         (forward-line 1))
       (unless (looking-at-p "^---[ \t]*$")
         (signal 'gh-invalid-input (list "Missing `---' body separator")))
-      (setq separator (line-end-position))
-      (goto-char separator)
       (forward-line 1)
       (list values
             (string-remove-suffix
@@ -145,16 +133,11 @@
   "Validate parsed VALUES using current field definitions."
   (dolist (definition gh-edit-fields)
     (let* ((name (plist-get definition :name))
-           (value (plist-get values (intern (format ":%s" name))))
-           (validator (plist-get definition :validate)))
+           (value (plist-get values (intern (format ":%s" name)))))
       (when (and (plist-get definition :required)
                  (or (null value) (equal value "")))
         (signal 'gh-invalid-input
-                (list (format "%s is required" (symbol-name name)))))
-      (when validator
-        (let ((message (funcall validator value values)))
-          (when (stringp message)
-            (signal 'gh-invalid-input (list message)))))))
+                (list (format "%s is required" (symbol-name name)))))))
   values)
 
 (defun gh-edit--field-at-point ()
@@ -179,7 +162,7 @@
               (skip-chars-forward " \t" end)
               (setq start (point)))
           (beginning-of-line)
-          (search-forward ":" end t)
+          (search-forward ":" end)
           (skip-chars-forward " \t" end)
           (setq start (point)))
         (list start end values :exclusive 'no)))))
@@ -189,7 +172,7 @@
   (let ((buffer (current-buffer)))
     (dolist (definition gh-edit-fields)
       (let ((name (plist-get definition :name))
-          (fetch (plist-get definition :completion-fetch)))
+            (fetch (plist-get definition :completion-fetch)))
         (when fetch
           (funcall
            fetch
@@ -197,26 +180,21 @@
              (when (buffer-live-p buffer)
                (with-current-buffer buffer
                  (puthash name values gh-edit--completion-values))))
-           (lambda (_error) nil)))))))
+           #'ignore))))))
 
 (cl-defun gh-edit-open
-    (name context resource fields values body submit
-          &key source-buffer after-success)
+    (name fields values body submit &key after-success)
   "Open structured editor NAME.
-CONTEXT and RESOURCE are preserved for navigation.  FIELDS defines the header,
-VALUES and BODY provide initial content, and SUBMIT receives values, body,
-success, and error callbacks."
-  (let ((source (or source-buffer (current-buffer)))
+FIELDS defines the header, VALUES and BODY provide initial content, and SUBMIT
+receives values, body, success, and error callbacks."
+  (let ((source (current-buffer))
         (buffer (get-buffer-create name)))
     (with-current-buffer buffer
       (gh-edit-mode)
-      (setq gh-edit-context context
-            gh-edit-resource resource
-            gh-edit-source-buffer source
+      (setq gh-edit-source-buffer source
             gh-edit-fields fields
             gh-edit-submit-function submit
             gh-edit-after-success-function after-success
-            gh-edit-original-values values
             gh-edit-submitting nil
             gh-edit--completion-values (make-hash-table :test #'eq))
       (gh-edit--insert-template values body)
@@ -250,16 +228,17 @@ success, and error callbacks."
            (kill-buffer buffer)))
        (when (buffer-live-p source)
          (with-current-buffer source
-           (when (fboundp 'gh-ui-refresh) (gh-ui-refresh t)))))
+           (when (derived-mode-p 'gh-section-mode)
+             (gh-ui-refresh t)))))
      (lambda (error)
        (when (buffer-live-p buffer)
          (with-current-buffer buffer
-           (setq gh-edit-submitting nil
-                 header-line-format
-                 (propertize (format " Submission failed: %s"
-                                     (gh-error-message error))
-                             'face 'error))
-           (message "gh: %s" (gh-error-message error))))))))
+           (let ((text (gh-error-message error)))
+             (setq gh-edit-submitting nil
+                   header-line-format
+                   (propertize (format " Submission failed: %s" text)
+                               'face 'error))
+             (message "gh: %s" text))))))))
 
 (defun gh-edit-cancel ()
   "Cancel editing, preserving the source page."
@@ -267,7 +246,7 @@ success, and error callbacks."
   (when (or (not (buffer-modified-p))
             (yes-or-no-p "Discard this GitHub edit? "))
     (let ((source gh-edit-source-buffer))
-      (kill-buffer (current-buffer))
+      (kill-buffer)
       (when (buffer-live-p source)
         (pop-to-buffer source)))))
 

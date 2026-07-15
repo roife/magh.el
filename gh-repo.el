@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -13,7 +13,6 @@
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
 (require 'transient)
@@ -24,55 +23,39 @@
 
 (defun gh-repo--context (&optional value)
   "Resolve VALUE as a required repository context."
-  (condition-case error
-      (gh-context-resolve value t)
-    (gh-invalid-input
-     (if (called-interactively-p 'interactive)
-         (gh-context-from-repository (read-string "Repository (OWNER/NAME): "))
-       (signal (car error) (cdr error))))))
+  (gh-context-resolve (or value gh-buffer-context) t))
 
 (defun gh-repo--buffer-name (context &optional suffix)
   "Return native repository buffer name for CONTEXT and SUFFIX."
   (format "*gh: %s%s*" (gh-context-repository context)
           (if suffix (concat " · " suffix) "")))
 
-(defun gh-repo--resource (data &optional context)
+(defun gh-repo--resource (data context)
   "Convert repository DATA to a native resource."
-  (let* ((data (or (gh-core--alist-get 'repo data) data))
-         (name (or (gh-core--alist-get 'nameWithOwner data)
-                   (gh-core--alist-get 'fullName data)
-                   (and context (gh-context-repository context))))
-         (resource-context (if name
-                               (gh-context-from-repository
-                                name (and context (gh-context-host context)))
-                             context)))
+  (let* ((data (or (alist-get 'repo data) data))
+         (name (or (alist-get 'nameWithOwner data)
+                   (alist-get 'full_name data)))
+         (resource-context
+          (gh-context-from-repository name (gh-context-host context))))
     (gh-resource-create
-     'repository resource-context :name name
-     :title name :url (or (gh-core--alist-get 'url data)
-                          (and resource-context
-                               (gh-context-web-url resource-context)))
+     'repository resource-context :title name
+     :url (or (alist-get 'html_url data) (alist-get 'url data))
      :data data)))
 
 (defun gh-repo--format-candidate (resource)
   "Format repository RESOURCE for completion."
-  (let* ((data (plist-get resource :data))
-         (repo (or (gh-core--alist-get 'repo data) data))
-         (visibility (or (gh-core--alist-get 'visibility repo)
-                         (and (gh-core--alist-get 'private repo) "private") "public"))
-         (description (or (gh-core--alist-get 'description repo) "")))
+  (let ((repo (plist-get resource :data)))
     (gh-ui--row
-     (gh-ui--styled (downcase (format "%s" visibility)) 'gh-permission)
+     (gh-ui--styled (downcase (alist-get 'visibility repo)) 'gh-permission)
      (gh-ui--styled (gh-resource-title resource) 'gh-repository)
-     description)))
+     (alist-get 'description repo))))
 
 (defun gh-repo--select (title data)
   "Select and open a repository from DATA using TITLE."
-  (let* ((context (gh-context-resolve))
-         (resources (mapcar (lambda (item) (gh-repo--resource item context)) data))
-         (resource (gh-candidate-read title resources
-                                      :formatter #'gh-repo--format-candidate
-                                      :category 'gh-repository :preview t)))
-    (when resource (gh-resource-open resource))))
+  (let ((context (gh-context-resolve)))
+    (gh-candidate-select-and-open
+     title (mapcar (lambda (item) (gh-repo--resource item context)) data)
+     #'gh-repo--format-candidate t)))
 
 ;;; Status
 
@@ -104,65 +87,59 @@
   (pcase kind
     ('issue
      (gh-resource-create
-      'issue context :number (gh-core--alist-get 'number data)
-      :title (gh-core--alist-get 'title data)
-      :url (gh-core--alist-get 'url data) :data data))
+      'issue context :number (alist-get 'number data)
+      :title (alist-get 'title data)
+      :url (alist-get 'url data)))
     ('pr
      (gh-resource-create
-      'pr context :number (gh-core--alist-get 'number data)
-      :title (gh-core--alist-get 'title data)
-      :url (gh-core--alist-get 'url data) :data data))
+      'pr context :number (alist-get 'number data)
+      :title (alist-get 'title data)
+      :url (alist-get 'url data)))
     ('run
      (gh-resource-create
-      'run context :id (or (gh-core--alist-get 'databaseId data)
-                           (gh-core--alist-get 'id data))
-      :title (or (gh-core--alist-get 'displayTitle data)
-                 (gh-core--alist-get 'name data))
-      :url (gh-core--alist-get 'url data) :data data))
+      'run context :id (alist-get 'databaseId data)
+      :title (alist-get 'displayTitle data)
+      :url (alist-get 'url data)))
     ('release
      (gh-resource-create
-      'release context :tag (gh-core--alist-get 'tagName data)
-      :title (or (gh-core--alist-get 'name data)
-                 (gh-core--alist-get 'tagName data))
-      :url (gh-core--alist-get 'url data) :data data))))
+      'release context :tag (alist-get 'tagName data)
+      :title (or (alist-get 'name data)
+                 (alist-get 'tagName data))
+      :url (alist-get 'url data)))))
 
 (defun gh-repo--insert-topic (kind context data)
   "Insert compact KIND topic from DATA in CONTEXT."
   (let* ((resource (gh-repo--topic-resource kind context data))
-         (number (gh-core--alist-get 'number data))
-         (state (or (and (gh-core--alist-get 'isDraft data) "DRAFT")
-                    (and (gh-core--alist-get 'isPrerelease data) "PRERELEASE")
-                    (gh-core--alist-get 'conclusion data)
-                    (gh-core--alist-get 'status data)
-                    (gh-core--alist-get 'state data)
-                    (and (eq kind 'release) "PUBLISHED") ""))
-         (title (or (gh-core--alist-get 'title data)
-                    (gh-core--alist-get 'displayTitle data)
-                    (gh-core--alist-get 'name data)
-                    (gh-core--alist-get 'tagName data) ""))
-         (author (gh-core--name (gh-core--alist-get 'author data)))
-         (review (gh-core--alist-get 'reviewDecision data))
-         (workflow (or (gh-core--alist-get 'workflowName data)
-                       (and (eq kind 'run) (gh-core--alist-get 'name data))))
-         (comments (gh-core--alist-get 'comments data))
-         (comment-count
-          (or (gh-core--alist-get 'commentsCount data)
-              (gh-core--alist-get 'totalCount comments)
-              (and (listp comments) (length comments)) 0))
-         (updated (or (gh-core--alist-get 'updatedAt data)
-                      (gh-core--alist-get 'publishedAt data)
-                      (gh-core--alist-get 'createdAt data)))
+         (number (alist-get 'number data))
+         (state (or (and (alist-get 'isDraft data) "DRAFT")
+                    (and (alist-get 'isPrerelease data) "PRERELEASE")
+                    (alist-get 'conclusion data)
+                    (alist-get 'status data)
+                    (alist-get 'state data)
+                    (and (eq kind 'release) "PUBLISHED")))
+         (title (or (alist-get 'title data)
+                    (alist-get 'displayTitle data)
+                    (alist-get 'name data)
+                    (alist-get 'tagName data)))
+         (author (gh-core--name (alist-get 'author data)))
+         (review (alist-get 'reviewDecision data))
+         (workflow (or (alist-get 'workflowName data)
+                       (and (eq kind 'run) (alist-get 'name data))))
+         (comment-count (gh-core--comments-count data))
+         (updated (or (alist-get 'updatedAt data)
+                      (alist-get 'publishedAt data)
+                      (alist-get 'createdAt data)))
          (identifier
           (pcase kind
             ((or 'issue 'pr)
              (gh-ui--styled (format "#%s" number) 'gh-resource-number))
             ('release
-             (gh-ui--styled (gh-core--alist-get 'tagName data) 'gh-tag))))
+             (gh-ui--styled (alist-get 'tagName data) 'gh-tag))))
          (key (or number (plist-get resource :id) (plist-get resource :tag))))
     (gh-ui--section (topic (list kind key) resource t)
       (gh-ui--format-row
        (list :state (and (not (eq kind 'release))
-                         (gh-ui--styled (upcase (format "%s" state))
+                         (gh-ui--styled (upcase state)
                                         (gh-core--state-face state)))
              :identifier identifier
              :title (gh-ui--styled title 'gh-resource-title)
@@ -178,19 +155,19 @@
       (when (eq kind 'pr)
         (gh-ui--insert-header
          "Branches" (format "%s → %s"
-                            (or (gh-core--alist-get 'headRefName data) "")
-                            (or (gh-core--alist-get 'baseRefName data) ""))
+                            (alist-get 'headRefName data)
+                            (alist-get 'baseRefName data))
          'gh-branch))
       (when (eq kind 'run)
-        (gh-ui--insert-header "Branch" (gh-core--alist-get 'headBranch data)
+        (gh-ui--insert-header "Branch" (alist-get 'headBranch data)
                               'gh-branch)
-        (gh-ui--insert-header "Event" (gh-core--alist-get 'event data)))
+        (gh-ui--insert-header "Event" (alist-get 'event data)))
       (when (memq kind '(issue pr))
-        (when-let* ((labels (gh-core--alist-get 'labels data)))
-          (gh-ui--insert-header "Labels" (gh-core--names labels) 'gh-label))
+        (gh-ui--insert-header
+         "Labels" (gh-core--names (alist-get 'labels data)) 'gh-label)
         (when (eq kind 'issue)
           (gh-ui--insert-header
-           "Assigned" (gh-core--names (gh-core--alist-get 'assignees data))
+           "Assigned" (gh-core--names (alist-get 'assignees data))
            'gh-author))
         (gh-ui--insert-header "Comments" comment-count))
       (when (eq kind 'release)
@@ -207,45 +184,42 @@
          (runs (alist-get 'runs result))
          (releases (alist-get 'releases result))
          (repo-resource (gh-repo--resource repo context))
-         (name (or (gh-core--alist-get 'nameWithOwner repo)
-                   (gh-context-repository context)))
-         (visibility (gh-core--alist-get 'visibility repo))
-         (permission (gh-core--alist-get 'viewerPermission repo))
-         (stars (or (gh-core--alist-get 'stargazerCount repo) 0))
-         (forks (or (gh-core--alist-get 'forkCount repo) 0)))
+         (name (alist-get 'nameWithOwner repo))
+         (visibility (alist-get 'visibility repo))
+         (permission (alist-get 'viewerPermission repo))
+         (stars (alist-get 'stargazerCount repo))
+         (forks (alist-get 'forkCount repo)))
     (gh-ui--insert-header "Repository" name 'gh-repository repo-resource)
-    (gh-ui--insert-header "Visibility" (downcase (format "%s" visibility))
+    (gh-ui--insert-header "Visibility" (downcase visibility)
                           'gh-permission)
     (gh-ui--insert-header "User" (and permission (format "(%s)" permission))
                           'gh-permission)
     (gh-ui--insert-header "Default branch"
-                          (gh-core--name (gh-core--alist-get 'defaultBranchRef repo))
+                          (gh-core--name (alist-get 'defaultBranchRef repo))
                           'gh-branch)
     (gh-ui--insert-header "Stats" (format "%s stars, %s forks" stars forks))
     (insert "\n")
     (gh-ui--section (description 'description repo-resource nil)
       "Description"
-      (gh-ui--insert-markdown (or (gh-core--alist-get 'description repo)
+      (gh-ui--insert-markdown (or (alist-get 'description repo)
                                   "No description.") context))
     (gh-ui--section (statistics 'statistics
                                 (gh-resource-create 'statistics context) t)
       "Statistics"
       (gh-ui--insert-header "Stars" stars)
       (gh-ui--insert-header "Watchers"
-                            (or (gh-core--alist-get
-                                 'totalCount (gh-core--alist-get 'watchers repo)) 0))
+                            (alist-get 'totalCount (alist-get 'watchers repo)))
       (gh-ui--insert-header "Forks" forks)
       (gh-ui--insert-header "Open issues"
-                            (or (gh-core--alist-get
-                                 'totalCount (gh-core--alist-get 'issues repo)) 0))
-      (gh-ui--insert-header "Size" (and (gh-core--alist-get 'diskUsage repo)
+                            (alist-get 'totalCount (alist-get 'issues repo)))
+      (gh-ui--insert-header "Size" (and (alist-get 'diskUsage repo)
                                         (format "%s KiB"
-                                                (gh-core--alist-get 'diskUsage repo))))
+                                                (alist-get 'diskUsage repo))))
       (when languages
         (insert "\n")
         (let* ((pairs (mapcar (lambda (entry) (cons (symbol-name (car entry))
                                                      (cdr entry))) languages))
-               (total (max 1 (apply #'+ (mapcar #'cdr pairs)))))
+               (total (apply #'+ (mapcar #'cdr pairs))))
           (dolist (entry (sort pairs (lambda (a b) (> (cdr a) (cdr b)))))
             (insert
              (gh-ui--row
@@ -366,7 +340,7 @@
 (defun gh-statistics (&optional context)
   "Open repository statistics for CONTEXT."
   (interactive)
-  (setq context (gh-repo--context (or context gh-buffer-context)))
+  (setq context (gh-repo--context context))
   (gh-ui--open-page
    (gh-repo--buffer-name context "Statistics") context 'statistics
    (gh-context-repository context)
@@ -386,15 +360,15 @@
        (insert "\n")
        (gh-ui--section (statistics 'repository-statistics nil nil)
          "Repository"
-         (dolist (entry `(("Stars" . ,(gh-core--alist-get 'stargazerCount repo))
-                          ("Forks" . ,(gh-core--alist-get 'forkCount repo))
-                          ("Size" . ,(and (gh-core--alist-get 'diskUsage repo)
+         (dolist (entry `(("Stars" . ,(alist-get 'stargazerCount repo))
+                          ("Forks" . ,(alist-get 'forkCount repo))
+                          ("Size" . ,(and (alist-get 'diskUsage repo)
                                           (format "%s KiB"
-                                                  (gh-core--alist-get 'diskUsage repo))))))
+                                                  (alist-get 'diskUsage repo))))))
            (gh-ui--insert-header (car entry) (cdr entry))))
        (gh-ui--section (languages 'languages nil nil)
          "Languages"
-         (let ((total (max 1 (apply #'+ (mapcar #'cdr languages)))))
+         (let ((total (apply #'+ (mapcar #'cdr languages))))
            (dolist (entry (sort (copy-sequence languages)
                                 (lambda (a b) (> (cdr a) (cdr b)))))
              (insert
@@ -412,8 +386,7 @@
   (interactive)
   (let ((context (gh-context-resolve)))
     (gh-edit-open
-     "*gh: Create Repository*" context
-     (gh-resource-create 'repository context)
+     "*gh: Create Repository*"
      '((:name name :required t)
        (:name owner)
        (:name description)
@@ -441,50 +414,46 @@
 (defun gh-repo--settings-values (repo)
   "Convert repository REPO data to structured settings values."
   (list
-   :repository (gh-core--alist-get 'nameWithOwner repo)
-   :default-branch (gh-core--name (gh-core--alist-get 'defaultBranchRef repo))
-   :description (or (gh-core--alist-get 'description repo) "")
-   :visibility (downcase (format "%s" (gh-core--alist-get 'visibility repo)))
-   :homepage (or (gh-core--alist-get 'homepageUrl repo) "")
-   :topics (mapcar #'gh-core--name (gh-core--alist-get 'repositoryTopics repo))
-   :template (if (gh-core--alist-get 'isTemplate repo) t :json-false)
-   :issues (if (gh-core--alist-get 'hasIssuesEnabled repo) t :json-false)
-   :projects (if (gh-core--alist-get 'hasProjectsEnabled repo) t :json-false)
-   :discussions (if (gh-core--alist-get 'hasDiscussionsEnabled repo) t :json-false)
-   :wiki (if (gh-core--alist-get 'hasWikiEnabled repo) t :json-false)
-   :merge-commit (if (gh-core--alist-get 'mergeCommitAllowed repo) t :json-false)
-   :squash-merge (if (gh-core--alist-get 'squashMergeAllowed repo) t :json-false)
-   :rebase-merge (if (gh-core--alist-get 'rebaseMergeAllowed repo) t :json-false)
+   :repository (alist-get 'nameWithOwner repo)
+   :default-branch (gh-core--name (alist-get 'defaultBranchRef repo))
+   :description (or (alist-get 'description repo) "")
+   :visibility (downcase (alist-get 'visibility repo))
+   :homepage (or (alist-get 'homepageUrl repo) "")
+   :topics (mapcar #'gh-core--name (alist-get 'repositoryTopics repo))
+   :template (if (alist-get 'isTemplate repo) t :json-false)
+   :issues (if (alist-get 'hasIssuesEnabled repo) t :json-false)
+   :projects (if (alist-get 'hasProjectsEnabled repo) t :json-false)
+   :discussions (if (alist-get 'hasDiscussionsEnabled repo) t :json-false)
+   :wiki (if (alist-get 'hasWikiEnabled repo) t :json-false)
+   :merge-commit (if (alist-get 'mergeCommitAllowed repo) t :json-false)
+   :squash-merge (if (alist-get 'squashMergeAllowed repo) t :json-false)
+   :rebase-merge (if (alist-get 'rebaseMergeAllowed repo) t :json-false)
    :delete-branch-on-merge
-   (if (gh-core--alist-get 'deleteBranchOnMerge repo) t :json-false)))
+   (if (alist-get 'deleteBranchOnMerge repo) t :json-false)))
 
 ;;;###autoload
 (defun gh-repository-settings-edit (&optional context)
   "Asynchronously fetch and edit repository settings for CONTEXT."
   (interactive)
-  (setq context (gh-repo--context (or context gh-buffer-context)))
+  (setq context (gh-repo--context context))
   (message "Fetching repository settings…")
   (gh-api--repo-get
    context
    (lambda (repo)
      (let* ((original (gh-repo--settings-values repo))
             (boolean-fields
-             '((:name template :type boolean) (:name issues :type boolean)
-               (:name projects :type boolean) (:name discussions :type boolean)
-               (:name wiki :type boolean) (:name merge-commit :type boolean)
-               (:name squash-merge :type boolean) (:name rebase-merge :type boolean)
-               (:name delete-branch-on-merge :type boolean)))
+             '(template issues projects discussions wiki merge-commit
+               squash-merge rebase-merge delete-branch-on-merge))
             (branch-fetch
              (lambda (ok fail)
                (gh-api--repo-branches
                 context
                 (lambda (items)
                   (funcall ok (mapcar (lambda (item)
-                                       (gh-core--alist-get 'name item)) items)))
+                                       (alist-get 'name item)) items)))
                 fail))))
        (gh-edit-open
-        (gh-repo--buffer-name context "Settings") context
-        (gh-resource-create 'repository context) 
+        (gh-repo--buffer-name context "Settings")
         (append
          `((:name repository :required t)
            (:name default-branch :required t :completion-fetch ,branch-fetch)
@@ -492,7 +461,8 @@
            (:name visibility :choices ("public" "private" "internal"))
            (:name homepage)
            (:name topics :multiple t))
-         boolean-fields)
+         (mapcar (lambda (field) (list :name field :type 'boolean))
+                 boolean-fields))
         original "Edit fields above, then press C-c C-c to submit."
         (lambda (values _body success error)
           (let* ((old-topics (plist-get original :topics))
@@ -504,13 +474,10 @@
                         :homepage (plist-get values :homepage)
                         :add-topics (seq-difference new-topics old-topics #'string=)
                         :remove-topics (seq-difference old-topics new-topics #'string=))))
-            (dolist (field '(template issues projects discussions wiki merge-commit
-                                      squash-merge rebase-merge delete-branch-on-merge))
-              (setq settings
-                    (plist-put settings (intern (format ":%s" field))
-                               (eq (plist-get values (intern (format ":%s" field))) t))))
-            (gh-api--repo-edit context settings success error)))
-        :source-buffer (current-buffer))))
+            (dolist (field boolean-fields)
+              (let ((key (intern (format ":%s" field))))
+                (setf (plist-get settings key) (eq (plist-get values key) t))))
+            (gh-api--repo-edit context settings success error))))))
    #'gh-core--user-error))
 
 ;;; Lifecycle actions
@@ -540,7 +507,7 @@
 (defun gh-repository-fork (&optional context)
   "Asynchronously fork repository CONTEXT."
   (interactive)
-  (setq context (gh-repo--context (or context gh-buffer-context)))
+  (setq context (gh-repo--context context))
   (when (gh-core--confirm (format "Fork %s? " (gh-context-repository context)))
     (gh-api--repo-fork
      context nil
@@ -553,7 +520,7 @@
 (defun gh-repository-rename (name &optional context)
   "Rename repository CONTEXT to NAME."
   (interactive (list (read-string "New repository name: ")))
-  (setq context (gh-repo--context (or context gh-buffer-context)))
+  (setq context (gh-repo--context context))
   (when (gh-core--confirm
          (format "Rename %s to %s? " (gh-context-repository context) name))
     (gh-api--repo-rename
@@ -569,7 +536,7 @@
 (defun gh-repository-delete (&optional context)
   "Permanently delete repository CONTEXT."
   (interactive)
-  (setq context (gh-repo--context (or context gh-buffer-context)))
+  (setq context (gh-repo--context context))
   (let ((repo (gh-context-repository context)))
     (when (and (gh-core--confirm (format "Permanently delete %s? " repo))
                (or (not gh-confirm-destructive-actions)
@@ -586,12 +553,12 @@
                                   (or (and gh-buffer-context
                                            (gh-context-ref gh-buffer-context))
                                       "HEAD"))))
-  (setq context (gh-repo--context (or context gh-buffer-context)))
+  (setq context (gh-repo--context context))
   (gh-api--commit-get
    context ref
    (lambda (commit)
      (gh-api--branch-create
-      context branch (gh-core--alist-get 'sha commit)
+      context branch (alist-get 'sha commit)
       (lambda (_) (message "Created branch %s" branch))
       #'gh-core--user-error))
    #'gh-core--user-error))
@@ -600,7 +567,7 @@
 (defun gh-branch-delete (branch &optional context)
   "Delete remote BRANCH in repository CONTEXT."
   (interactive (list (read-string "Delete remote branch: ")))
-  (setq context (gh-repo--context (or context gh-buffer-context)))
+  (setq context (gh-repo--context context))
   (when (gh-core--confirm (format "Delete remote branch %s? " branch))
     (gh-api--branch-delete
      context branch (lambda (_) (message "Deleted branch %s" branch))

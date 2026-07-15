@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -16,7 +16,6 @@
 
 (require 'cl-lib)
 (require 'json)
-(require 'seq)
 (require 'subr-x)
 (require 'gh-api)
 (require 'gh-client)
@@ -38,7 +37,7 @@
 ARGV is a list of strings.  No shell evaluates the command."
   (interactive (list (gh-command--read-argv)))
   (setq context (gh-context-resolve context))
-  (let* ((label (if argv (string-join (seq-take argv 2) " ") "gh"))
+  (let* ((label (if argv (string-join (take 2 argv) " ") "gh"))
          (buffer (gh-client--start-pty argv (format "*gh command: %s*" label)
                                        context)))
     (funcall gh-display-buffer-function buffer)
@@ -65,12 +64,34 @@ ARGV is a list of strings.  No shell evaluates the command."
   "Create generic API result buffer for ENDPOINT."
   (let ((buffer (get-buffer-create (format "*gh api: %s*" endpoint))))
     (with-current-buffer buffer
-      (special-mode)
-      (setq-local gh-command--generation 0)
+      (unless (derived-mode-p 'special-mode) (special-mode))
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (propertize "Loading GitHub API response…\n"
                             'font-lock-face 'shadow))))
+    buffer))
+
+(defun gh-command--run-api-request (endpoint request)
+  "Display the asynchronous API REQUEST in a buffer named for ENDPOINT.
+REQUEST receives success and error callbacks."
+  (let ((buffer (gh-command--api-buffer endpoint)))
+    (with-current-buffer buffer
+      (cl-incf gh-command--generation)
+      (let ((generation gh-command--generation))
+        (funcall
+         request
+         (lambda (data)
+           (when (= generation gh-command--generation)
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (insert (gh-command--json-string data))
+               (goto-char (point-min)))))
+         (lambda (error)
+           (when (= generation gh-command--generation)
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (insert (gh-error-message error) "\n")))))))
+    (funcall gh-display-buffer-function buffer)
     buffer))
 
 ;;;###autoload
@@ -86,25 +107,11 @@ METHOD defaults to GET.  FIELDS is an alist and PAGINATE requests all pages."
          current-prefix-arg))
   (setq context (gh-context-resolve context)
         method (or method "GET"))
-  (let ((buffer (gh-command--api-buffer endpoint)))
-    (with-current-buffer buffer
-      (cl-incf gh-command--generation)
-      (let ((generation gh-command--generation))
-        (gh-api--generic-request
-         context endpoint method fields paginate
-         (lambda (data)
-           (when (= generation gh-command--generation)
-             (let ((inhibit-read-only t))
-               (erase-buffer)
-               (insert (gh-command--json-string data))
-               (goto-char (point-min)))))
-         (lambda (error)
-           (when (= generation gh-command--generation)
-             (let ((inhibit-read-only t))
-               (erase-buffer)
-               (insert (gh-error-message error) "\n")))))))
-    (funcall gh-display-buffer-function buffer)
-    buffer))
+  (gh-command--run-api-request
+   endpoint
+   (lambda (success error)
+     (gh-api--generic-request context endpoint method fields paginate
+                              success error))))
 
 ;;;###autoload
 (defun gh-graphql-request (query variables &optional context)
@@ -114,25 +121,10 @@ METHOD defaults to GET.  FIELDS is an alist and PAGINATE requests all pages."
          (gh-command--parse-fields
           (read-string "Variables (key=value, comma separated): "))))
   (setq context (gh-context-resolve context))
-  (let ((buffer (gh-command--api-buffer "graphql")))
-    (with-current-buffer buffer
-      (cl-incf gh-command--generation)
-      (let ((generation gh-command--generation))
-        (gh-api--graphql
-         context query variables
-         (lambda (data)
-           (when (= generation gh-command--generation)
-             (let ((inhibit-read-only t))
-               (erase-buffer)
-               (insert (gh-command--json-string data))
-               (goto-char (point-min)))))
-         (lambda (error)
-           (when (= generation gh-command--generation)
-             (let ((inhibit-read-only t))
-               (erase-buffer)
-               (insert (gh-error-message error) "\n")))))))
-    (funcall gh-display-buffer-function buffer)
-    buffer))
+  (gh-command--run-api-request
+   "graphql"
+   (lambda (success error)
+     (gh-api--graphql context query variables success error))))
 
 (defun gh-auth-switch (host user)
   "Switch active GitHub CLI account to USER on HOST asynchronously."

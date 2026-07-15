@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (magit "4.0.0") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (magit "4.0.0") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -71,15 +71,13 @@ Supported members are `pr', `issue', and `run'."
 (defvar-local gh-magit--context-key nil
   "Cache key represented by the current Magit buffer.")
 
-(defvar gh-magit-resource-section-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map magit-section-mode-map)
-    (define-key map (kbd "RET") #'gh-ui-visit)
-    (define-key map (kbd "o") #'gh-ui-browse)
-    (define-key map (kbd "w") #'gh-ui-copy-url)
-    (define-key map (kbd ".") #'gh-ui-dispatch)
-    map)
-  "Keymap shared by GitHub resource sections in Magit status.")
+(defvar-keymap gh-magit-resource-section-map
+  :doc "Keymap shared by GitHub resource sections in Magit status."
+  :parent magit-section-mode-map
+  "RET" #'gh-ui-visit
+  "o" #'gh-ui-browse
+  "w" #'gh-ui-copy-url
+  "." #'gh-ui-dispatch)
 
 ;; `magit-section' discovers maps through these names.
 (defvar magit-gh-pr-section-map gh-magit-resource-section-map)
@@ -96,11 +94,10 @@ Supported members are `pr', `issue', and `run'."
 
 (defun gh-magit--context ()
   "Infer a repository context from the current Magit status buffer."
-  (let ((root (and (fboundp 'magit-toplevel) (magit-toplevel))))
-    (and root (condition-case nil
-                  (gh-context-resolve root t)
-                (gh-error nil)
-                (error nil)))))
+  (when-let* ((root (magit-toplevel)))
+    (condition-case nil
+        (gh-context-resolve root t)
+      (gh-error nil))))
 
 (defun gh-magit--key (context sections)
   "Return summary cache key for CONTEXT and SECTIONS."
@@ -114,13 +111,13 @@ Supported members are `pr', `issue', and `run'."
   "Return non-nil when completed cache ENTRY is fresh."
   (and entry
        (not (plist-get entry :loading))
-       (< (- (float-time) (or (plist-get entry :created) 0))
+       (< (- (float-time) (plist-get entry :created))
           gh-magit-cache-ttl)))
 
 (defun gh-magit--task (key context success error force)
   "Start summary task KEY in CONTEXT, calling SUCCESS or ERROR.
 FORCE bypasses the shared query cache."
-  (pcase key
+  (pcase-exhaustive key
     ('pr
      (gh-api--pr-list context `(:state "open" :limit ,gh-magit-list-limit)
                       success error force))
@@ -151,8 +148,7 @@ FORCE bypasses the shared query cache."
                      '(:author "@me" :state "open")))
     ('created-issues
      (gh-api--search context 'issues "" success error force
-                     '(:author "@me" :state "open")))
-    (_ (funcall success nil))))
+                     '(:author "@me" :state "open")))))
 
 (defun gh-magit--task-keys (sections)
   "Return request keys needed for SECTIONS in the current scope."
@@ -168,10 +164,9 @@ FORCE bypasses the shared query cache."
 (defun gh-magit--refresh-buffers (key)
   "Refresh live Magit status buffers displaying summary KEY."
   (dolist (buffer (buffer-list))
-    (when (and (buffer-live-p buffer)
-               (with-current-buffer buffer
-                 (and (derived-mode-p 'magit-status-mode)
-                      (equal gh-magit--context-key key))))
+    (when (with-current-buffer buffer
+            (and (derived-mode-p 'magit-status-mode)
+                 (equal gh-magit--context-key key)))
       (with-current-buffer buffer
         (condition-case error
             (magit-refresh-buffer)
@@ -196,62 +191,45 @@ When FORCE is non-nil, bypass the shared query cache."
          (generation (cl-incf gh-magit--generation))
          (tasks (gh-magit--task-keys sections))
          (remaining (length tasks))
-         (data (copy-tree (plist-get old :data)))
+         (data (copy-alist (plist-get old :data)))
          errors)
     (puthash key
              (list :loading t :generation generation :data data
                    :errors nil :created (plist-get old :created))
              gh-magit--cache)
-    (if (zerop remaining)
-        (gh-magit--finish-request key generation data nil)
-      (dolist (task tasks)
-        (gh-magit--task
-         task context
-         (lambda (value)
-           (setf (alist-get task data) value)
-           (when (zerop (cl-decf remaining))
-             (gh-magit--finish-request key generation data errors)))
-         (lambda (request-error)
-           (push (cons task request-error) errors)
-           (when (zerop (cl-decf remaining))
-             (gh-magit--finish-request key generation data errors)))
-         force)))))
-
-(defun gh-magit--item-context (fallback data)
-  "Return context for DATA, using FALLBACK for repository-scoped rows."
-  (let* ((repository (gh-core--alist-get 'repository data))
-         (name (or (gh-core--alist-get 'nameWithOwner repository)
-                   (gh-core--alist-get 'fullName repository)
-                   (gh-core--alist-get 'full_name repository))))
-    (if name
-        (gh-context-from-repository name (gh-context-host fallback))
-      fallback)))
+    (dolist (task tasks)
+      (gh-magit--task
+       task context
+       (lambda (value)
+         (setf (alist-get task data) value)
+         (when (zerop (cl-decf remaining))
+           (gh-magit--finish-request key generation data errors)))
+       (lambda (request-error)
+         (push (cons task request-error) errors)
+         (when (zerop (cl-decf remaining))
+           (gh-magit--finish-request key generation data errors)))
+       force))))
 
 (defun gh-magit--resource (kind context data)
   "Create a KIND resource from summary DATA and CONTEXT."
-  (setq context (gh-magit--item-context context data))
+  (when-let* ((name (alist-get 'nameWithOwner (alist-get 'repository data))))
+    (setq context (gh-context-from-repository name (gh-context-host context))))
   (pcase kind
     ('pr (gh-pr--resource context data))
     ('issue (gh-issue--resource context data))
     ('run (gh-actions--run-resource context data))))
 
-(defun gh-magit--comments-count (data)
-  "Return normalized comment count from summary DATA."
-  (let ((comments (gh-core--alist-get 'comments data)))
-    (or (gh-core--alist-get 'commentsCount data)
-        (and (listp comments) (length comments)) 0)))
-
 (defun gh-magit--insert-topic (kind context data)
   "Insert one Issue or Pull Request DATA row of KIND in CONTEXT."
   (let* ((resource (gh-magit--resource kind context data))
-         (number (gh-core--alist-get 'number data))
-         (state (if (gh-core--alist-get 'isDraft data)
-                    "DRAFT" (or (gh-core--alist-get 'state data) "")))
-         (title (or (gh-core--alist-get 'title data) ""))
+         (number (alist-get 'number data))
+         (state (if (alist-get 'isDraft data)
+                    "DRAFT" (alist-get 'state data)))
+         (title (alist-get 'title data))
          (repo (plist-get resource :repository))
-         (author (gh-core--name (gh-core--alist-get 'author data)))
+         (author (gh-core--name (alist-get 'author data)))
          (review (and (eq kind 'pr)
-                      (gh-core--alist-get 'reviewDecision data))))
+                      (alist-get 'reviewDecision data))))
     (gh-ui--section (gh-topic (cons repo number) resource t)
       (gh-ui--row
        (gh-ui--styled (upcase state) (gh-core--state-face state))
@@ -262,45 +240,44 @@ When FORCE is non-nil, bypass the shared query cache."
        (gh-ui--styled author 'gh-author)
        (and review (gh-ui--styled review (gh-core--state-face review)))
        (gh-ui--styled
-        (gh-core--date (gh-core--alist-get 'updatedAt data)) 'gh-date))
+        (gh-core--date (alist-get 'updatedAt data)) 'gh-date))
       (when (eq kind 'pr)
-        (gh-ui--insert-header
-         "Branches"
-         (format "%s → %s"
-                 (or (gh-core--alist-get 'headRefName data) "?")
-                 (or (gh-core--alist-get 'baseRefName data) "?"))
-         'gh-branch)
-        (gh-ui--insert-header "Review"
-                              review (and review (gh-core--state-face review))))
+        (when-let* ((head (alist-get 'headRefName data))
+                    (base (alist-get 'baseRefName data)))
+          (gh-ui--insert-header "Branches" (format "%s → %s" head base)
+                                'gh-branch))
+        (when review
+          (gh-ui--insert-header "Review" review
+                                (gh-core--state-face review))))
       (gh-ui--insert-header "Labels"
                             (gh-core--names
-                             (gh-core--alist-get 'labels data))
+                             (alist-get 'labels data))
                             'gh-label)
       (when (eq kind 'issue)
         (gh-ui--insert-header
          "Assigned"
-         (gh-core--names (gh-core--alist-get 'assignees data)) 'gh-author))
-      (gh-ui--insert-header "Comments" (gh-magit--comments-count data)))))
+         (gh-core--names (alist-get 'assignees data)) 'gh-author))
+      (gh-ui--insert-header "Comments" (gh-core--comments-count data)))))
 
 (defun gh-magit--insert-run (context data)
   "Insert one Actions run DATA row in CONTEXT."
   (let* ((resource (gh-magit--resource 'run context data))
          (id (plist-get resource :id))
-         (state (or (gh-core--alist-get 'conclusion data)
-                    (gh-core--alist-get 'status data) "")))
+         (state (or (alist-get 'conclusion data)
+                    (alist-get 'status data))))
     (gh-ui--section (gh-run id resource t)
       (gh-ui--row
        (gh-ui--styled (upcase state) (gh-core--state-face state))
-       (gh-ui--styled (gh-core--alist-get 'displayTitle data)
+       (gh-ui--styled (alist-get 'displayTitle data)
                       'gh-resource-title)
-       (gh-ui--styled (or (gh-core--alist-get 'workflowName data)
-                          (gh-core--alist-get 'name data))
+       (gh-ui--styled (or (alist-get 'workflowName data)
+                          (alist-get 'name data))
                       'gh-workflow)
        (gh-ui--styled
-        (gh-core--date (gh-core--alist-get 'createdAt data)) 'gh-date))
+        (gh-core--date (alist-get 'createdAt data)) 'gh-date))
       (gh-ui--insert-header "Branch"
-                            (gh-core--alist-get 'headBranch data) 'gh-branch)
-      (gh-ui--insert-header "Event" (gh-core--alist-get 'event data)))))
+                            (alist-get 'headBranch data) 'gh-branch)
+      (gh-ui--insert-header "Event" (alist-get 'event data)))))
 
 (defun gh-magit--insert-group (heading kind context items)
   "Insert HEADING containing KIND rows from ITEMS in CONTEXT."
@@ -324,9 +301,9 @@ When FORCE is non-nil, bypass the shared query cache."
                          (seq-filter
                           (lambda (item)
                             (equal branch
-                                   (gh-core--alist-get 'headRefName item)))
+                                   (alist-get 'headRefName item)))
                           items)))
-           (other (if current (seq-difference items current #'equal) items)))
+           (other (seq-difference items current #'equal)))
       (magit-insert-section (gh-pull-requests)
         (magit-insert-heading "Pull requests")
         (magit-insert-section-body
@@ -398,18 +375,16 @@ When FORCE is non-nil, bypass the shared query cache."
         (magit-insert-heading "GitHub")
         (magit-insert-section-body
           (let ((data (plist-get entry :data)))
-            (cond
-             ((and (plist-get entry :loading) (null data))
-              (insert (propertize "  loading…\n"
-                                  'font-lock-face 'gh-loading)))
-             (t
+            (if (and (plist-get entry :loading) (null data))
+                (insert (propertize "  loading…\n"
+                                    'font-lock-face 'gh-loading))
               (when (plist-get entry :loading)
                 (insert (propertize "  refreshing…\n"
                                     'font-lock-face 'gh-loading)))
               (if (eq gh-magit-summary-scope 'user)
                   (gh-magit--insert-user-data context sections data)
                 (gh-magit--insert-repository-data context sections data))
-              (gh-magit--insert-errors (plist-get entry :errors))))))))))
+              (gh-magit--insert-errors (plist-get entry :errors)))))))))
 
 ;;;###autoload
 (defun gh-magit-refresh (&optional both-layers)
@@ -452,18 +427,16 @@ With prefix argument BOTH-LAYERS, also invalidate matching common API cache."
 
 (defun gh-magit--install-dispatch ()
   "Install the GitHub suffix after Magit's Run suffix."
-  (when (and (fboundp 'transient-append-suffix)
-             (not (ignore-errors
-                    (transient-get-suffix 'magit-dispatch gh-magit-dispatch-key))))
+  (unless (ignore-errors
+            (transient-get-suffix 'magit-dispatch gh-magit-dispatch-key))
     (transient-append-suffix
       'magit-dispatch "!"
       `(,gh-magit-dispatch-key "GitHub" gh-magit-dispatch))))
 
 (defun gh-magit--remove-dispatch ()
   "Remove the GitHub suffix from Magit's dispatcher."
-  (when (and (fboundp 'transient-remove-suffix)
-             (ignore-errors
-               (transient-get-suffix 'magit-dispatch gh-magit-dispatch-key)))
+  (when (ignore-errors
+          (transient-get-suffix 'magit-dispatch gh-magit-dispatch-key))
     (transient-remove-suffix 'magit-dispatch gh-magit-dispatch-key)))
 
 ;;;###autoload

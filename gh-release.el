@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -13,8 +13,6 @@
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'seq)
 (require 'subr-x)
 (require 'transient)
 (require 'gh-api)
@@ -31,31 +29,31 @@
 
 (defun gh-release--resource (context data)
   "Create Release resource from DATA."
-  (let ((tag (gh-core--alist-get 'tagName data)))
+  (let ((tag (alist-get 'tagName data)))
     (gh-resource-create
      'release context :tag tag
-     :title (or (gh-core--alist-get 'name data) tag)
-     :url (or (gh-core--alist-get 'url data)
+     :title (or (alist-get 'name data) tag)
+     :url (or (alist-get 'url data)
               (gh-context-web-url context (format "releases/tag/%s" tag)))
      :data data)))
 
 (defun gh-release--state (data)
   "Return display state for Release DATA."
-  (cond ((gh-core--alist-get 'isDraft data) "draft")
-        ((gh-core--alist-get 'isPrerelease data) "prerelease")
+  (cond ((alist-get 'isDraft data) "draft")
+        ((alist-get 'isPrerelease data) "prerelease")
         (t "published")))
 
 (defun gh-release--format-candidate (resource)
   "Format Release RESOURCE for selection."
-  (let ((data (plist-get resource :data)))
+  (let* ((data (plist-get resource :data))
+         (state (gh-release--state data)))
     (gh-ui--row
-     (gh-ui--styled (upcase (gh-release--state data))
-                    (gh-core--state-face (gh-release--state data)))
+     (gh-ui--styled (upcase state) (gh-core--state-face state))
      (gh-ui--styled (plist-get resource :tag) 'gh-tag)
      (gh-ui--styled (gh-resource-title resource) 'gh-resource-title)
      (gh-ui--styled
-      (gh-core--date (or (gh-core--alist-get 'publishedAt data)
-                         (gh-core--alist-get 'createdAt data)))
+      (gh-core--date (or (alist-get 'publishedAt data)
+                         (alist-get 'createdAt data)))
       'gh-date))))
 
 ;;;###autoload
@@ -71,64 +69,60 @@
             (resource (gh-candidate-read
                        "Release: " resources :category 'gh-release :preview t
                        :formatter #'gh-release--format-candidate)))
-       (when resource (gh-resource-open resource))))
+       (gh-resource-open resource)))
    #'gh-core--user-error))
 
 (defun gh-release--asset-resource (context tag asset)
   "Create asset resource for ASSET belonging to TAG."
   (gh-resource-create
-   'release-asset context :id (gh-core--alist-get 'id asset)
-   :tag tag :name (gh-core--alist-get 'name asset)
-   :title (gh-core--alist-get 'name asset)
-   :url (or (gh-core--alist-get 'url asset)
-            (gh-core--alist-get 'browser_download_url asset))
+   'release-asset context :id (alist-get 'id asset)
+   :tag tag :name (alist-get 'name asset)
+   :title (alist-get 'name asset)
+   :url (alist-get 'url asset)
    :data asset))
 
 (defun gh-release--render-view (context data)
   "Render Release DATA in CONTEXT."
   (let* ((resource (gh-release--resource context data))
-         (tag (gh-core--alist-get 'tagName data))
-         (target (gh-core--alist-get 'targetCommitish data))
+         (tag (alist-get 'tagName data))
+         (target (alist-get 'targetCommitish data))
+         (state (gh-release--state data))
          (target-resource
-          (if (and target (string-match-p "\\`[[:xdigit:]]\\{7,40\\}\\'" target))
+          (if (string-match-p "\\`[[:xdigit:]]\\{7,40\\}\\'" target)
               (gh-resource-create 'commit context :sha target)
             (gh-resource-create 'tree (gh-context-copy context :ref target)
                                 :ref target :path ""))))
     (setq gh-release--tag tag)
     (insert (propertize tag 'font-lock-face 'gh-tag) "  "
-            (propertize (or (gh-core--alist-get 'name data) "")
+            (propertize (gh-resource-title resource)
                         'font-lock-face 'gh-resource-title) "\n")
     (add-text-properties (line-beginning-position 0) (point)
                          (list 'gh-resource resource))
-    (gh-ui--insert-header "State" (gh-release--state data)
-                          (gh-core--state-face (gh-release--state data)))
+    (gh-ui--insert-header "State" state (gh-core--state-face state))
     (gh-ui--insert-header "Author"
-                          (gh-core--name (gh-core--alist-get 'author data))
+                          (gh-core--name (alist-get 'author data))
                           'gh-author)
     (gh-ui--insert-header "Target" target 'gh-branch target-resource)
     (gh-ui--insert-header "Published"
-                          (gh-core--date (gh-core--alist-get 'publishedAt data))
+                          (gh-core--date (alist-get 'publishedAt data))
                           'gh-date)
     (insert "\n")
     (gh-ui--section (description 'description resource nil)
       "Description"
-      (gh-ui--insert-markdown (or (gh-core--alist-get 'body data)
+      (gh-ui--insert-markdown (or (alist-get 'body data)
                                   "No release notes.") context))
-    (let ((assets (or (gh-core--alist-get 'assets data) nil)))
+    (let ((assets (alist-get 'assets data)))
       (gh-ui--section (assets 'assets nil nil)
         (format "Assets (%d)" (length assets))
         (dolist (asset assets)
           (let ((asset-resource (gh-release--asset-resource context tag asset)))
-            (gh-ui--section (asset (or (gh-core--alist-get 'id asset)
-                                       (gh-core--alist-get 'name asset))
+            (gh-ui--section (asset (alist-get 'id asset)
                                    asset-resource t)
-              (gh-ui--styled (gh-core--alist-get 'name asset) 'gh-file)
+              (gh-ui--styled (alist-get 'name asset) 'gh-file)
               (gh-ui--insert-header "Size"
-                                    (format "%s bytes"
-                                            (or (gh-core--alist-get 'size asset) 0)))
+                                    (format "%s bytes" (alist-get 'size asset)))
               (gh-ui--insert-header
-               "Downloads" (or (gh-core--alist-get 'downloadCount asset)
-                                (gh-core--alist-get 'download_count asset) 0)))))))))
+               "Downloads" (alist-get 'downloadCount asset)))))))))
 
 (defun gh-release--setup-view (context tag)
   "Install Release detail bindings for CONTEXT and TAG."
@@ -194,7 +188,7 @@
      context
      (lambda (items)
        (funcall success (mapcar (lambda (item)
-                                  (gh-core--alist-get 'name item)) items)))
+                                  (alist-get 'name item)) items)))
      error)))
 
 (defun gh-release--fields (context &optional creating)
@@ -210,7 +204,6 @@
   "Open Release creation editor with VALUES and BODY."
   (gh-edit-open
    (format "*gh: %s · New Release*" (gh-context-repository context))
-   context (gh-resource-create 'release context)
    (gh-release--fields context t)
    (append values
            (list :target (or (gh-context-default-branch context) "main")
@@ -246,30 +239,28 @@
    context tag target nil
    (lambda (data)
      (gh-release--open-create-editor
-      context (list :tag tag :title (gh-core--alist-get 'name data)
+      context (list :tag tag :title (alist-get 'name data)
                     :target target)
-      (or (gh-core--alist-get 'body data) "")))
+      (alist-get 'body data)))
    #'gh-core--user-error))
 
 (defun gh-release--edit-values (data)
   "Convert Release DATA to editor values."
-  (list :tag (gh-core--alist-get 'tagName data)
-        :title (gh-core--alist-get 'name data)
-        :target (gh-core--alist-get 'targetCommitish data)
-        :draft (if (gh-core--alist-get 'isDraft data) t :json-false)
-        :prerelease (if (gh-core--alist-get 'isPrerelease data) t :json-false)))
+  (list :tag (alist-get 'tagName data)
+        :title (alist-get 'name data)
+        :target (alist-get 'targetCommitish data)
+        :draft (if (alist-get 'isDraft data) t :json-false)
+        :prerelease (if (alist-get 'isPrerelease data) t :json-false)))
 
 (defun gh-release--open-edit-editor (context tag data)
   "Open structured editor for Release TAG using DATA."
   (gh-edit-open
    (format "*gh: %s · Edit Release %s*" (gh-context-repository context) tag)
-   context (gh-release--resource context data)
    (gh-release--fields context) (gh-release--edit-values data)
-   (or (gh-core--alist-get 'body data) "")
+   (alist-get 'body data)
    (lambda (values body success error)
      (gh-api--release-edit context tag (plist-put values :body body)
-                           success error))
-   :source-buffer (current-buffer)))
+                           success error))))
 
 ;;;###autoload
 (defun gh-release-edit (&optional context tag)
@@ -327,7 +318,7 @@
     (gh-api--release-get
      context tag
      (lambda (data)
-       (let ((enable (not (gh-core--alist-get 'isPrerelease data))))
+       (let ((enable (not (alist-get 'isPrerelease data))))
          (gh-api--release-edit
           context tag (list :prerelease (if enable t :json-false))
           (lambda (_) (message "Prerelease %s" (if enable "enabled" "disabled"))

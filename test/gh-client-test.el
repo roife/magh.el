@@ -14,7 +14,7 @@
          :cache nil :dedupe nil)
         (gh-test-wait (lambda () (= count 1)))
         (should-not failure)
-        (should (gh-core--alist-get 'ok result))
+        (should (alist-get 'ok result))
         (accept-process-output nil 0.01)
         (should (= count 1))))))
 
@@ -28,14 +28,14 @@
        :context (gh-context-create :host "github.example.com") :cache nil)
       (gh-test-wait (lambda () (or result failure)))
       (should-not failure)
-      (should (equal (gh-core--alist-get 'argv result)
+      (should (equal (alist-get 'argv result)
                      '("two words" "$(never-evaluated)")))
-      (should (equal (gh-core--alist-get 'host result) "github.example.com")))
+      (should (equal (alist-get 'host result) "github.example.com")))
     (let (result)
       (gh-client--json-async '("fast-json") (lambda (value) (setq result value))
                              #'ignore :cache nil)
       (gh-test-wait (lambda () result))
-      (should-not (gh-core--alist-get 'disabled result)))))
+      (should-not (alist-get 'disabled result)))))
 
 (ert-deftest gh-client-generic-json-can-distinguish-false-from-null ()
   (gh-test-with-clean-client
@@ -47,8 +47,8 @@
        '("fast-json") (lambda (value) (setq preserved value)) #'ignore
        :json-false-object :json-false)
       (gh-test-wait (lambda () preserved))
-      (should-not (gh-core--alist-get 'disabled default))
-      (should (eq (gh-core--alist-get 'disabled preserved) :json-false))
+      (should-not (alist-get 'disabled default))
+      (should (eq (alist-get 'disabled preserved) :json-false))
       (should (= (gh-client-cache-size) 2)))))
 
 (ert-deftest gh-client-cache-and-inflight-deduplicate-asynchronously ()
@@ -104,6 +104,21 @@
                              (lambda (error) (setq failure error)) :cache nil)
       (gh-test-wait (lambda () failure))
       (should (eq (car failure) 'gh-json-error)))))
+
+(ert-deftest gh-client-missing-executable-cleans-transport-buffers ()
+  (gh-test-with-clean-client
+    (let ((gh-executable "/missing/gh") failure)
+      (gh-client--text-async
+       '("version") #'ignore (lambda (error) (setq failure error))
+       :cache nil :dedupe nil)
+      (gh-test-wait (lambda () failure))
+      (should (eq (car failure) 'gh-missing-executable))
+      (should-not
+       (cl-find-if
+        (lambda (buffer)
+          (string-match-p "\\` \\*gh \\(?:stdout\\|stderr\\)\\*"
+                          (buffer-name buffer)))
+        (buffer-list))))))
 
 (ert-deftest gh-client-stream-is-cancellable-and-delivers-complete-text ()
   (gh-test-with-clean-client

@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github, convenience
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 
@@ -14,8 +14,6 @@
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'subr-x)
 (require 'gh-api)
 (require 'gh-actions)
 (require 'gh-candidate)
@@ -41,8 +39,8 @@
   '((gh-repository . gh-embark-repository-map)
     (gh-file . gh-embark-file-map)
     (gh-tree . gh-embark-file-map)
-    (gh-issue . gh-embark-issue-map)
-    (gh-pr . gh-embark-pr-map)
+    (gh-issue . gh-embark-topic-map)
+    (gh-pr . gh-embark-topic-map)
     (gh-release . gh-embark-resource-map)
     (gh-workflow . gh-embark-resource-map)
     (gh-run . gh-embark-run-map)
@@ -79,18 +77,10 @@
 
 (defun gh-embark--target-marker ()
   "Return insertion marker in the buffer from which Embark was invoked."
-  (let ((buffer
-         (or (and (fboundp 'embark--target-buffer)
-                  (embark--target-buffer))
-             (and (minibufferp) (minibuffer-selected-window)
-                  (window-buffer (minibuffer-selected-window)))
-             (current-buffer))))
-    (unless (buffer-live-p buffer)
-      (user-error "Embark source buffer is no longer live"))
-    (with-current-buffer buffer
-      (when buffer-read-only
-        (user-error "Embark source buffer is read-only"))
-      (copy-marker (point) t))))
+  (with-current-buffer (embark--target-buffer)
+    (when buffer-read-only
+      (user-error "Embark source buffer is read-only"))
+    (copy-marker (point) t)))
 
 (defun gh-embark--insert (text)
   "Insert TEXT into the Embark source buffer."
@@ -193,17 +183,6 @@
      'gh-workflow-template-repositories (gh-context-repository context)
      "workflow template repositories")))
 
-(defun gh-embark--decode-content (data)
-  "Decode GitHub Contents API DATA."
-  (let ((content (or (gh-core--alist-get 'content data) ""))
-        (encoding (gh-core--alist-get 'encoding data)))
-    (if (equal encoding "base64")
-        (decode-coding-string
-         (base64-decode-string
-          (replace-regexp-in-string "[\r\n]" "" content))
-         'utf-8)
-      content)))
-
 (defun gh-embark--remote-content (target consumer)
   "Fetch remote file TARGET asynchronously and call CONSUMER with its text."
   (let* ((resource (gh-embark--resource target))
@@ -214,7 +193,7 @@
       (user-error "This action requires a remote file"))
     (gh-api--content-get
      context path ref
-     (lambda (data) (funcall consumer (gh-embark--decode-content data)))
+     (lambda (data) (funcall consumer (gh-api--decode-content data)))
      #'gh-core--user-error)))
 
 (defun gh-embark-insert-remote-file (target)
@@ -326,15 +305,8 @@
   "I" #'gh-embark-insert-remote-file
   "Y" #'gh-embark-copy-remote-file)
 
-(defvar-keymap gh-embark-issue-map
-  :doc "Embark actions for gh.el Issue resources."
-  :parent gh-embark-resource-map
-  "e" #'gh-embark-edit-topic
-  "x" #'gh-embark-close-topic
-  "r" #'gh-embark-reopen-topic)
-
-(defvar-keymap gh-embark-pr-map
-  :doc "Embark actions for gh.el Pull Request resources."
+(defvar-keymap gh-embark-topic-map
+  :doc "Embark actions for gh.el Issue and Pull Request resources."
   :parent gh-embark-resource-map
   "e" #'gh-embark-edit-topic
   "x" #'gh-embark-close-topic
@@ -358,18 +330,18 @@
   "Install all gh.el category maps into `embark-keymap-alist'."
   (setq gh-embark--saved-keymaps nil)
   (dolist (entry gh-embark--category-maps)
-    (let* ((category (car entry))
-           (existing (assq category embark-keymap-alist)))
-      (push (list category (and existing t) (cdr existing))
+    (let ((category (car entry)))
+      (push (cons category (alist-get category embark-keymap-alist))
             gh-embark--saved-keymaps)
       (setf (alist-get category embark-keymap-alist) (cdr entry)))))
 
 (defun gh-embark--uninstall ()
   "Restore Embark category maps replaced by this integration."
   (dolist (saved gh-embark--saved-keymaps)
-    (pcase-let ((`(,category ,present ,value) saved))
-      (if present
-          (setf (alist-get category embark-keymap-alist) value)
+    (let ((category (car saved))
+          (keymap (cdr saved)))
+      (if keymap
+          (setf (alist-get category embark-keymap-alist) keymap)
         (setq embark-keymap-alist
               (assq-delete-all category embark-keymap-alist)))))
   (setq gh-embark--saved-keymaps nil))
@@ -384,8 +356,7 @@
           (gh-embark--install)
         (setq gh-embark-mode nil)
         (user-error "Embark is not installed"))
-    (when (featurep 'embark)
-      (gh-embark--uninstall))))
+    (gh-embark--uninstall)))
 
 (provide 'gh-embark)
 ;;; gh-embark.el ends here

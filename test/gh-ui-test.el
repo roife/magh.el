@@ -155,6 +155,36 @@
             (should-not (string-match-p "value=old" (buffer-string))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest gh-ui-visibility-survives-page-recreation-via-magit-cache ()
+  (let ((gh-display-buffer-function #'identity)
+        (gh-section-cache-visibility t)
+        (gh-ui--visibility-cache (make-hash-table :test #'equal))
+        (context (gh-context-from-repository "o/r"))
+        callback)
+    (cl-labels
+        ((open-page
+          ()
+          (gh-ui--open-page
+           " *gh visibility test*" context 'issue-list 'open
+           (lambda (success _error _force) (setq callback success))
+           (lambda (_data)
+             (gh-ui--section (items 'items nil t)
+               "Items"
+               (insert "Body\n"))))))
+      (let ((buffer (open-page)))
+        (with-current-buffer buffer
+          (funcall callback nil)
+          (magit-section-show (car (oref magit-root-section children))))
+        (kill-buffer buffer))
+      (setq callback nil)
+      (let ((buffer (open-page)))
+        (unwind-protect
+            (with-current-buffer buffer
+              (funcall callback nil)
+              (should-not
+               (oref (car (oref magit-root-section children)) hidden)))
+          (kill-buffer buffer))))))
+
 (ert-deftest gh-ui-markdown-creates-native-reference-buttons ()
   (let ((context (gh-context-from-repository "o/r"))
         (gh-view-inline-images nil))

@@ -4,7 +4,7 @@
 
 ;; Author: gh.el contributors
 ;; Keywords: tools, vc, github
-;; Package-Requires: ((emacs "29.1") (transient "0.7.0"))
+;; Package-Requires: ((emacs "31.1") (transient "0.7.0"))
 
 ;;; Commentary:
 
@@ -12,7 +12,6 @@
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'subr-x)
 (require 'transient)
 (require 'gh-api)
@@ -29,29 +28,20 @@
 
 (defun gh-commit--resource (context data)
   "Create Commit resource from DATA."
-  (let* ((sha (gh-core--alist-get 'sha data))
-         (commit (gh-core--alist-get 'commit data))
-         (message (or (gh-core--alist-get 'message commit)
-                      (gh-core--alist-get 'message data) "")))
+  (let* ((sha (alist-get 'sha data))
+         (commit (alist-get 'commit data))
+         (message (alist-get 'message commit)))
     (gh-resource-create
-     'commit context :sha sha :title (car (split-string message "\n"))
-     :url (or (gh-core--alist-get 'html_url data)
-              (gh-core--alist-get 'url data)
-              (gh-context-web-url context (format "commit/%s" sha)))
+     'commit context :sha sha
+     :title (and message (car (split-string message "\n")))
+     :url (alist-get 'html_url data)
      :data data)))
 
 (defun gh-commit--author (data)
   "Return useful author text from commit DATA."
-  (or (gh-core--name (gh-core--alist-get 'author data))
-      (gh-core--name (gh-core--alist-get
-                      'author (gh-core--alist-get 'commit data))) ""))
-
-(defun gh-commit--date (data)
-  "Return authored date from commit DATA."
-  (or (gh-core--alist-get 'date
-                          (gh-core--alist-get
-                           'author (gh-core--alist-get 'commit data)))
-      (gh-core--alist-get 'committedDate data)))
+  (or (gh-core--name (alist-get 'author data))
+      (gh-core--name (alist-get
+                      'author (alist-get 'commit data)))))
 
 (defun gh-commit--insert-row (context data)
   "Insert Commit DATA row."
@@ -59,10 +49,13 @@
          (sha (plist-get resource :sha)))
     (gh-ui--section (commit sha resource t)
       (gh-ui--row
-       (gh-ui--styled (substring sha 0 (min 10 (length sha))) 'gh-hash)
+       (gh-ui--styled (substring sha 0 10) 'gh-hash)
        (gh-ui--styled (gh-resource-title resource) 'gh-resource-title)
        (gh-ui--styled (gh-commit--author data) 'gh-author)
-       (gh-ui--styled (gh-core--date (gh-commit--date data)) 'gh-date))
+       (gh-ui--styled
+        (gh-core--date
+         (alist-get 'date (alist-get 'author (alist-get 'commit data))))
+        'gh-date))
       (gh-ui--insert-header "SHA" sha 'gh-hash)
       (gh-ui--insert-header "Author" (gh-commit--author data) 'gh-author))))
 
@@ -98,13 +91,11 @@
      :setup (lambda ()
               (setq gh-commit--params params gh-commit--limit gh-list-limit)))))
 
-(defalias 'gh-history #'gh-commit-list)
-
 (defun gh-commit-load-more ()
   "Double the current commit history limit."
   (interactive)
   (let* ((context gh-buffer-context)
-         (params (plist-put (copy-sequence gh-commit--params)
+         (params (plist-put gh-commit--params
                             :limit (* 2 gh-commit--limit))))
     (setq gh-commit--limit (plist-get params :limit)
           gh-commit--params params
@@ -133,47 +124,47 @@
          (comments (alist-get 'comments result))
          (diff (alist-get 'diff result))
          (resource (gh-commit--resource context data))
-         (sha (gh-core--alist-get 'sha data))
-         (commit (gh-core--alist-get 'commit data))
-         (author (gh-core--alist-get 'author commit))
-         (committer (gh-core--alist-get 'committer commit))
-         (stats (gh-core--alist-get 'stats data))
-         (files (or (gh-core--alist-get 'files data) nil)))
+         (sha (alist-get 'sha data))
+         (commit (alist-get 'commit data))
+         (author (alist-get 'author commit))
+         (committer (alist-get 'committer commit))
+         (stats (alist-get 'stats data))
+         (files (alist-get 'files data)))
     (insert (propertize sha 'font-lock-face 'gh-hash) "\n")
     (add-text-properties (line-beginning-position 0) (point)
                          (list 'gh-resource resource))
     (gh-ui--insert-header "Author"
                           (format "%s <%s>"
-                                  (or (gh-core--alist-get 'name author) "")
-                                  (or (gh-core--alist-get 'email author) ""))
+                                  (alist-get 'name author)
+                                  (alist-get 'email author))
                           'gh-author)
     (gh-ui--insert-header "AuthorDate"
-                          (gh-core--date (gh-core--alist-get 'date author)) 'gh-date)
+                          (gh-core--date (alist-get 'date author)) 'gh-date)
     (gh-ui--insert-header "Committer"
                           (format "%s <%s>"
-                                  (or (gh-core--alist-get 'name committer) "")
-                                  (or (gh-core--alist-get 'email committer) ""))
+                                  (alist-get 'name committer)
+                                  (alist-get 'email committer))
                           'gh-author)
     (gh-ui--insert-header "CommitDate"
-                          (gh-core--date (gh-core--alist-get 'date committer))
+                          (gh-core--date (alist-get 'date committer))
                           'gh-date)
     (gh-ui--insert-header
      "Changes" (format "+%s -%s, %d files"
-                       (or (gh-core--alist-get 'additions stats) 0)
-                       (or (gh-core--alist-get 'deletions stats) 0)
+                       (alist-get 'additions stats)
+                       (alist-get 'deletions stats)
                        (length files)))
-    (dolist (parent (gh-core--alist-get 'parents data))
+    (dolist (parent (alist-get 'parents data))
       (let ((parent-resource (gh-commit--resource context parent)))
-        (gh-ui--insert-header "Parent" (gh-core--alist-get 'sha parent)
+        (gh-ui--insert-header "Parent" (alist-get 'sha parent)
                               'gh-hash parent-resource)))
     (insert "\n")
     (gh-ui--section (message 'message resource nil)
-      (car (split-string (or (gh-core--alist-get 'message commit) "") "\n"))
-      (gh-ui--insert-markdown (or (gh-core--alist-get 'message commit) "") context))
+      (car (split-string (alist-get 'message commit) "\n"))
+      (gh-ui--insert-markdown (alist-get 'message commit) context))
     (gh-ui--section (changed-files 'changed-files nil nil)
       (format "Changed files (%d)" (length files))
       (dolist (file files)
-        (let* ((path (gh-core--alist-get 'filename file))
+        (let* ((path (alist-get 'filename file))
                (file-resource
                 (gh-resource-create
                  'file (gh-context-copy context :ref sha :path path)
@@ -181,41 +172,25 @@
           (gh-ui--section (file path file-resource t)
             (gh-ui--row
              (gh-ui--styled path 'gh-file)
-             (gh-ui--styled (or (gh-core--alist-get 'status file) "modified")
-                            'gh-permission)
-             (gh-ui--styled (format "+%s"
-                                    (or (gh-core--alist-get 'additions file) 0))
+             (gh-ui--styled (alist-get 'status file) 'gh-permission)
+             (gh-ui--styled (format "+%s" (alist-get 'additions file))
                             'gh-added)
-             (gh-ui--styled (format "-%s"
-                                    (or (gh-core--alist-get 'deletions file) 0))
+             (gh-ui--styled (format "-%s" (alist-get 'deletions file))
                             'gh-removed))
-            (when-let* ((patch (gh-core--alist-get 'patch file)))
+            (when-let* ((patch (alist-get 'patch file)))
               (gh-ui--insert-diff patch)))))
     (gh-ui--section (diff 'diff nil t)
       "Full diff"
       (gh-ui--insert-diff diff))
     (gh-ui--section (comments 'comments nil nil)
       (format "Comments (%d)" (length comments))
-      (cl-loop for comment in comments
-               for index from 1
-               do (gh-ui--section
-                      (comment (or (gh-core--alist-get 'id comment) index) nil nil)
-                    (gh-ui--row
-                     (gh-ui--styled
-                      (gh-core--name (gh-core--alist-get 'user comment))
-                      'gh-author)
-                     (gh-ui--styled
-                      (gh-core--date (gh-core--alist-get 'created_at comment))
-                      'gh-date))
-                    (gh-ui--insert-markdown
-                     (or (gh-core--alist-get 'body comment) "") context)))))))
-
-(defun gh-commit--setup-view (_context sha)
-  "Install Commit view keys for SHA."
-  (setq gh-commit--sha sha
-        gh-buffer-dispatch-function #'gh-commit-dispatch)
-  (local-set-key (kbd "b") #'gh-commit-browse-tree)
-  (local-set-key (kbd "c") #'gh-commit-comment))
+      (dolist (comment comments)
+        (gh-ui--section (comment (alist-get 'id comment) nil nil)
+          (gh-ui--row
+           (gh-ui--styled (gh-core--name (alist-get 'user comment)) 'gh-author)
+           (gh-ui--styled (gh-core--date (alist-get 'created_at comment))
+                          'gh-date))
+          (gh-ui--insert-markdown (alist-get 'body comment) context)))))))
 
 (defun gh-commit-browse-tree (&optional context sha)
   "Browse the repository tree at commit SHA in CONTEXT."
@@ -240,7 +215,12 @@
    (lambda (success error force)
      (gh-commit--fetch-view context sha success error force))
    (lambda (data) (gh-commit--render-view context data))
-   :preview preview :setup (lambda () (gh-commit--setup-view context sha))))
+   :preview preview
+   :setup (lambda ()
+            (setq gh-commit--sha sha
+                  gh-buffer-dispatch-function #'gh-commit-dispatch)
+            (local-set-key (kbd "b") #'gh-commit-browse-tree)
+            (local-set-key (kbd "c") #'gh-commit-comment))))
 
 (defun gh-commit-comment (body &optional context sha path line)
   "Add BODY as a comment on Commit SHA, optionally at PATH and LINE."
