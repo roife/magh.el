@@ -1093,7 +1093,9 @@
                        (parents)
                        (files . (((filename . "a.el") (status . "modified")
                                   (additions . 2) (deletions . 1)
-                                  (patch . "@@ -1 +1 @@\n-old\n+new"))
+                                  (patch . ,(concat
+                                             "@@ -1 +1 @@\n-old\n+new\n"
+                                             "@@ -10,0 +11 @@\n+later")))
                                  ((filename . "b.el") (status . "modified")
                                   (additions . 1) (deletions . 1)
                                   (patch . "@@ -1 +1 @@\n-old-b\n+new-b"))))))
@@ -1109,10 +1111,47 @@
        (lambda (result) (gh-commit--render-view context result)) data nil)
       (let* ((top-level (oref magit-root-section children))
              (types (mapcar (lambda (section) (oref section type)) top-level))
+             (changed-files-section
+              (seq-find (lambda (section)
+                          (eq (oref section type) 'changed-files))
+                        top-level))
              (diff-section (seq-find (lambda (section)
                                        (eq (oref section type) 'diff))
                                      top-level)))
         (should (equal types '(message changed-files diff comments)))
+        (let* ((text (buffer-string))
+               (file-position
+                (string-match (regexp-quote "a.el modified") text))
+               (file-newline (and file-position
+                                  (string-match "\n" text file-position)))
+               (hunk-position (and file-newline
+                                   (string-match
+                                    (regexp-quote "@@ -1 +1 @@")
+                                    text file-newline)))
+               (hunk-newline (and hunk-position
+                                  (string-match "\n" text hunk-position))))
+          (dolist (position (list file-position file-newline))
+            (should position)
+            (should (gh-test-font-lock-face-p
+                     text position 'magit-diff-file-heading))
+            (should (gh-test-font-lock-face-p
+                     text position 'magit-diff-file-heading-highlight)))
+          (dolist (position (list hunk-position hunk-newline))
+            (should position)
+            (should (gh-test-font-lock-face-p
+                     text position 'magit-diff-hunk-heading))))
+        (let* ((files (oref changed-files-section children))
+               (first-file-hunks (oref (car files) children)))
+          (should (equal (mapcar (lambda (section) (oref section type)) files)
+                         '(file file)))
+          (should (equal (mapcar (lambda (section) (oref section type))
+                                 first-file-hunks)
+                         '(diff-hunk diff-hunk)))
+          (let ((hunk (car first-file-hunks)))
+            (magit-section-hide hunk)
+            (should (oref hunk hidden))
+            (magit-section-show hunk)
+            (should-not (oref hunk hidden))))
         (should (oref diff-section hidden))
         (magit-section-show diff-section)
         (let ((file-sections (oref diff-section children)))
@@ -1137,7 +1176,7 @@
          (current-key (gh-commit--review-key context 7 "HEAD"))
          (stale-key (gh-commit--review-key context 7 "OLD"))
          (result
-          '((pr . ((number . 7)
+          `((pr . ((number . 7)
                    (title . "Review me")
                    (baseRefName . "main")
                    (baseRefOid . "BASE")
@@ -1154,9 +1193,11 @@
             (comparison
              . ((files . (((filename . "src/a.el")
                             (status . "modified")
-                            (additions . 1)
+                            (additions . 2)
                             (deletions . 1)
-                            (patch . "@@ -1 +1 @@\n-old\n+new"))))))
+                            (patch . ,(concat
+                                       "@@ -1 +1 @@\n-old\n+new\n"
+                                       "@@ -10,0 +11 @@\n+later")))))))
             (threads
              . (((id . "T1")
                  (root_id . 10)
@@ -1178,11 +1219,38 @@
              '((:id 2 :path "src/old.el" :subject-type "FILE"
                 :body "Old draft"))
              gh-commit--review-drafts)
-    (setq text
-          (gh-test-render-page
-           'commit-review 7
-           (lambda (data) (gh-commit--render-review context 7 data))
-           result))
+    (with-temp-buffer
+      (gh-section-mode)
+      (setq gh-buffer-context context
+            gh-buffer-resource-kind 'commit-review
+            gh-buffer-resource-id 7)
+      (gh-ui--replace
+       (lambda (data) (gh-commit--render-review context 7 data)) result nil)
+      (setq text (buffer-string))
+      (let* ((changed-files
+              (seq-find (lambda (section)
+                          (eq (oref section type) 'changed-files))
+                        (oref magit-root-section children)))
+             (file (car (oref changed-files children)))
+             (hunks (oref file children)))
+        (let* ((rendered (buffer-string))
+               (file-position
+                (string-match (regexp-quote "src/a.el modified") rendered))
+               (hunk-position
+                (string-match (regexp-quote "@@ -1 +1 @@") rendered)))
+          (should (gh-test-font-lock-face-p
+                   rendered file-position 'magit-diff-file-heading-highlight))
+          (should (gh-test-font-lock-face-p
+                   rendered hunk-position 'magit-diff-hunk-heading)))
+        (should (equal (mapcar (lambda (section) (oref section type)) hunks)
+                       '(diff-hunk diff-hunk)))
+        (should (equal (mapcar (lambda (section) (oref section type))
+                               (oref (car hunks) children))
+                       '(inline-comment inline-comment)))
+        (magit-section-hide (car hunks))
+        (should (oref (car hunks) hidden))
+        (magit-section-show (car hunks))
+        (should-not (oref (car hunks) hidden))))
     (should (string-match-p "PR #7  Review me" text))
     (should (string-match-p "APPROVED by alice" text))
     (should (string-match-p "Please change this" text))

@@ -52,6 +52,23 @@
       (gh-core--name (alist-get
                       'author (alist-get 'commit data)))))
 
+(defun gh-commit--diff-heading (text faces)
+  "Return TEXT as a full-line diff heading carrying FACES."
+  (let ((heading (if (string-suffix-p "\n" text) text (concat text "\n"))))
+    (dolist (face (ensure-list faces))
+      (font-lock-append-text-property
+       0 (length heading) 'font-lock-face face heading))
+    heading))
+
+(defun gh-commit--diff-file-heading (text)
+  "Return file heading TEXT with Magit's diff file background faces."
+  (gh-commit--diff-heading
+   text '(magit-diff-file-heading magit-diff-file-heading-highlight)))
+
+(defun gh-commit--diff-hunk-heading (text)
+  "Return hunk heading TEXT with Magit's diff hunk background face."
+  (gh-commit--diff-heading text 'magit-diff-hunk-heading))
+
 (defun gh-commit--insert-row (context data)
   "Insert Commit DATA row."
   (let* ((resource (gh-commit--resource context data))
@@ -176,21 +193,22 @@
     (if (string-empty-p (or patch ""))
         (insert (propertize "Binary or oversized diff unavailable.\n"
                             'font-lock-face 'shadow))
-      (dolist (record
-               (gh-commit--parse-patch-lines
-                patch context nil sha path 'commit-line))
-        (let ((start (point))
-              (resource (plist-get record :resource)))
-          (gh-ui--insert-diff (concat (plist-get record :text) "\n"))
-          (when resource
-            (add-text-properties start (point) (list 'gh-resource resource))
-            (dolist (comment comments)
-              (when (and (not (memq comment inserted))
-                         (equal (alist-get 'position comment)
-                                (plist-get resource :position)))
-                (push comment inserted)
-                (gh-commit--insert-commit-comment
-                 context sha comment t)))))))
+      (gh-commit--insert-patch-records
+       (gh-commit--parse-patch-lines
+        patch context nil sha path 'commit-line)
+       (lambda (record)
+         (let ((start (point))
+               (resource (plist-get record :resource)))
+           (gh-ui--insert-diff (concat (plist-get record :text) "\n"))
+           (when resource
+             (add-text-properties start (point) (list 'gh-resource resource))
+             (dolist (comment comments)
+               (when (and (not (memq comment inserted))
+                          (equal (alist-get 'position comment)
+                                 (plist-get resource :position)))
+                 (push comment inserted)
+                 (gh-commit--insert-commit-comment
+                  context sha comment t))))))))
     (let ((unmapped (seq-remove (lambda (comment) (memq comment inserted))
                                 comments)))
       (when unmapped
@@ -260,7 +278,7 @@
        for file-index from 1
        do
        (gh-ui--section (diff-file file-index nil nil)
-         (gh-ui--fontified-string (plist-get file :heading) 'diff-mode)
+         (gh-commit--diff-file-heading (plist-get file :heading))
          (unless (string-empty-p (plist-get file :preamble))
            (gh-ui--insert-diff (plist-get file :preamble)))
          (cl-loop
@@ -268,7 +286,7 @@
           for hunk-index from 1
           do
           (gh-ui--section (diff-hunk (cons file-index hunk-index) nil nil)
-            (gh-ui--fontified-string (plist-get hunk :heading) 'diff-mode)
+            (gh-commit--diff-hunk-heading (plist-get hunk :heading))
             (unless (string-empty-p (plist-get hunk :body))
               (gh-ui--insert-diff (plist-get hunk :body))))))))))
 
@@ -335,13 +353,14 @@
                  'file (gh-context-copy context :ref sha :path path)
                  :path path :ref sha :data file)))
           (gh-ui--section (file path file-resource nil)
-            (gh-ui--row
-             (gh-ui--styled path 'gh-file)
-             (gh-ui--styled (alist-get 'status file) 'gh-permission)
-             (gh-ui--styled (format "+%s" (alist-get 'additions file))
-                            'gh-added)
-             (gh-ui--styled (format "-%s" (alist-get 'deletions file))
-                            'gh-removed))
+            (gh-commit--diff-file-heading
+             (gh-ui--row
+              (gh-ui--styled path 'gh-file)
+              (gh-ui--styled (alist-get 'status file) 'gh-permission)
+              (gh-ui--styled (format "+%s" (alist-get 'additions file))
+                             'gh-added)
+              (gh-ui--styled (format "-%s" (alist-get 'deletions file))
+                             'gh-removed)))
             (gh-commit--insert-commit-patch
              context sha path (alist-get 'patch file)
              (seq-filter
@@ -428,7 +447,7 @@
         records)
     (dolist (text (split-string (gh-ui--normalize-newlines (or patch ""))
                                 "\n" nil))
-      (let (line side location)
+      (let (line side location hunk-heading)
         (cond
          ((string-match
            "^@@ -\\([0-9]+\\)\\(?:,[0-9]+\\)? +\\+\\([0-9]+\\)\\(?:,[0-9]+\\)? @@"
@@ -438,7 +457,8 @@
             (setq diff-position 0))
           (setq old-line (string-to-number (match-string 1 text))
                 new-line (string-to-number (match-string 2 text)))
-          (cl-incf hunk))
+          (cl-incf hunk)
+          (setq hunk-heading t))
          ((and (> hunk 0) (string-prefix-p "-" text)
                (not (string-prefix-p "---" text)))
           (cl-incf diff-position)
@@ -458,7 +478,7 @@
           (cl-incf diff-position)))
         (push
          (append
-          (list :text text)
+          (list :text text :hunk hunk :hunk-heading hunk-heading)
           (when location
             (list :resource
                   (gh-resource-create
@@ -468,6 +488,39 @@
                    :position diff-position))))
          records)))
     (nreverse records)))
+
+(defun gh-commit--partition-patch-records (records)
+  "Partition parsed patch RECORDS into a preamble and hunk records."
+  (let (preamble hunks current)
+    (dolist (record records)
+      (if (plist-get record :hunk-heading)
+          (progn
+            (when current
+              (push (list :heading (car current)
+                          :records (nreverse (cdr current)))
+                    hunks))
+            (setq current (list record)))
+        (if current
+            (setcdr current (cons record (cdr current)))
+          (push record preamble))))
+    (when current
+      (push (list :heading (car current)
+                  :records (nreverse (cdr current)))
+            hunks))
+    (list :preamble (nreverse preamble) :hunks (nreverse hunks))))
+
+(defun gh-commit--insert-patch-records (records insert-record)
+  "Insert parsed patch RECORDS as foldable hunks.
+INSERT-RECORD inserts one non-heading record, including any anchored comments."
+  (let ((parts (gh-commit--partition-patch-records records)))
+    (dolist (record (plist-get parts :preamble))
+      (funcall insert-record record))
+    (dolist (hunk (plist-get parts :hunks))
+      (let ((heading (plist-get hunk :heading)))
+        (gh-ui--section (diff-hunk (plist-get heading :hunk) nil nil)
+          (gh-commit--diff-hunk-heading (plist-get heading :text))
+          (dolist (record (plist-get hunk :records))
+            (funcall insert-record record)))))))
 
 (defun gh-commit--review-thread-resource (context number head thread)
   "Create a structured review resource from THREAD."
@@ -584,13 +637,14 @@
                       drafts))
          inserted-threads inserted-drafts)
     (gh-ui--section (file path file-resource nil)
-      (gh-ui--row
-       (gh-ui--styled path 'gh-file)
-       (gh-ui--styled (or (alist-get 'status file) "modified") 'gh-permission)
-       (gh-ui--styled (format "+%s" (or (alist-get 'additions file) 0))
-                      'gh-added)
-       (gh-ui--styled (format "-%s" (or (alist-get 'deletions file) 0))
-                      'gh-removed))
+      (gh-commit--diff-file-heading
+       (gh-ui--row
+        (gh-ui--styled path 'gh-file)
+        (gh-ui--styled (or (alist-get 'status file) "modified") 'gh-permission)
+        (gh-ui--styled (format "+%s" (or (alist-get 'additions file) 0))
+                       'gh-added)
+        (gh-ui--styled (format "-%s" (or (alist-get 'deletions file) 0))
+                       'gh-removed)))
       (dolist (thread file-threads)
         (when (equal (upcase (or (alist-get 'subject_type thread) "LINE"))
                      "FILE")
@@ -604,30 +658,30 @@
       (if (string-empty-p (or patch ""))
           (insert (propertize "Binary or oversized diff unavailable.\n"
                               'font-lock-face 'shadow))
-        (dolist (record
-                 (gh-commit--parse-patch-lines
-                  patch context number head path))
-          (let ((start (point))
-                (resource (plist-get record :resource)))
-            (gh-ui--insert-diff (concat (plist-get record :text) "\n"))
-            (when resource
-              (add-text-properties start (point) (list 'gh-resource resource))
-              (let ((line (plist-get resource :line))
-                    (side (plist-get resource :side)))
-                (dolist (thread file-threads)
-                  (when (and (not (memq thread inserted-threads))
-                             (gh-commit--thread-at-location-p
-                              thread path line side))
-                    (push thread inserted-threads)
-                    (gh-commit--insert-review-thread
-                     context number head thread)))
-                (dolist (draft file-drafts)
-                  (when (and (not (memq draft inserted-drafts))
-                             (gh-commit--draft-at-location-p
-                              draft path line side))
-                    (push draft inserted-drafts)
-                    (gh-commit--insert-review-draft
-                     context number head draft-key draft))))))))
+        (gh-commit--insert-patch-records
+         (gh-commit--parse-patch-lines patch context number head path)
+         (lambda (record)
+           (let ((start (point))
+                 (resource (plist-get record :resource)))
+             (gh-ui--insert-diff (concat (plist-get record :text) "\n"))
+             (when resource
+               (add-text-properties start (point) (list 'gh-resource resource))
+               (let ((line (plist-get resource :line))
+                     (side (plist-get resource :side)))
+                 (dolist (thread file-threads)
+                   (when (and (not (memq thread inserted-threads))
+                              (gh-commit--thread-at-location-p
+                               thread path line side))
+                     (push thread inserted-threads)
+                     (gh-commit--insert-review-thread
+                      context number head thread)))
+                 (dolist (draft file-drafts)
+                   (when (and (not (memq draft inserted-drafts))
+                              (gh-commit--draft-at-location-p
+                               draft path line side))
+                     (push draft inserted-drafts)
+                     (gh-commit--insert-review-draft
+                      context number head draft-key draft)))))))))
       (let ((unmapped-threads
              (seq-remove (lambda (thread) (memq thread inserted-threads))
                          file-threads))
