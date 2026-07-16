@@ -42,8 +42,8 @@ without leaving Emacs.
 - Transient 0.7 or later
 - Markdown Mode 2.6 or later
 
-Embark and Forge are optional and are loaded only when their integrations are
-enabled.
+Embark, Forge, and emacs-pr-review are optional and are loaded only when their
+integrations are enabled.
 
 ## Installation
 
@@ -97,9 +97,15 @@ Useful direct entry points include:
 | `magh-command` | Run any `gh` command in an Emacs PTY |
 | `magh-api-request` | Call an arbitrary REST or GraphQL endpoint |
 
+Repository-scoped commands infer the current Git remote when possible and
+otherwise prompt for `OWNER/NAME`. Values in `magh-known-repositories` appear
+as completions in that prompt.
+
 Inside native resource pages, the usual Magit navigation applies: `TAB`
 expands or collapses a section, `RET` visits the resource at point, `n` and `p`
-move between sections, `g` refreshes, and `q` quits. Use `C-h m` in any page to
+move between sections, `g` refreshes, and `q` quits. Press `.` for the
+contextual action menu or `?` for the top-level menu. Use `b` or `o` to open the
+resource at point on GitHub, and `w` to copy its URL. Use `C-h m` in any page to
 see its resource-specific commands.
 
 Issue, pull request, and release editors use `C-c C-c` to submit and `C-c C-k`
@@ -118,8 +124,8 @@ All options are available through `M-x customize-group RET magh`. For example:
       magh-default-issue-state "open"
       magh-default-pr-state "open")
 
-;; Disable asynchronous thumbnails for remote images in GitHub Markdown.
-(setq magh-view-inline-images nil)
+;; Opt in to remote thumbnails in GitHub Markdown. This contacts image hosts.
+(setq magh-view-inline-images t)
 
 ;; Organizations shown by `magh-favorite-repositories`.
 (setq magh-favorite-organizations '("emacs-mirror" "github"))
@@ -165,3 +171,17 @@ requests, releases, workflows, runs, branches, commits, and notifications.
 The Forge bridge lets issue and pull request candidates open as Forge topics.
 It is opt-in and keeps track of repositories it adds so that cleanup does not
 remove entries from an existing Forge setup.
+
+### emacs-pr-review
+
+With the separately installed `emacs-pr-review` package, pull request
+candidates can open in its review interface:
+
+```elisp
+(require 'magh-pr-review)
+(magh-pr-review-mode 1)
+```
+
+The Forge and emacs-pr-review bridges are mutually exclusive. Enabling
+`magh-forge-mode` disables `magh-pr-review-mode`, and enabling
+`magh-pr-review-mode` disables `magh-forge-mode`.

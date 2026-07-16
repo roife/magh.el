@@ -524,9 +524,9 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
         (append
          `((:name repository :required t)
            (:name default-branch :required t :completion-fetch ,branch-fetch)
-           (:name description)
+           (:name description :allow-empty t)
            (:name visibility :choices ("public" "private" "internal"))
-           (:name homepage)
+           (:name homepage :allow-empty t)
            (:name topics :multiple t))
          (mapcar (lambda (field) (list :name field :type 'boolean))
                  boolean-fields))

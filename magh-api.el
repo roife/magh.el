@@ -146,7 +146,7 @@ Call CALLBACK with data, optionally processed by TRANSFORM."
    errback :context context :stdin stdin))
 
 (cl-defun magh-api--mutate-json
-    (context argv domains callback errback &key stdin)
+    (context argv domains callback errback &key stdin preserve-false)
   "Run JSON mutation ARGV and invalidate DOMAINS on success."
   (magh-client--mutate-json
    argv (lambda (result)
@@ -154,7 +154,8 @@ Call CALLBACK with data, optionally processed by TRANSFORM."
               (funcall errback (magh-api--error errors))
             (magh-api--invalidate domains)
             (funcall callback result)))
-   errback :context context :stdin stdin))
+   errback :context context :stdin stdin
+   :json-false-object (and preserve-false :json-false)))
 
 (defun magh-api--flag (flag value)
   "Return CLI FLAG and VALUE arguments, or nil if VALUE is nil."
@@ -243,7 +244,7 @@ HEADERS is a list of complete header strings."
 (defun magh-api--review-requests (context callback errback &optional force)
   "Fetch pull requests requesting review from the current account."
   (magh-api--search context 'prs "" callback errback force
-                  '(:review-requested "@me")))
+                  '(:review-requested "@me" :state "open")))
 
 (defun magh-api--assigned-issues (context callback errback &optional force)
   "Fetch issues assigned to the current account."
@@ -256,9 +257,9 @@ HEADERS is a list of complete header strings."
                   '(:assignee "@me" :state "open")))
 
 (defun magh-api--my-prs (context callback errback &optional force)
-  "Fetch pull requests authored by the current account."
+  "Fetch open pull requests authored by the current account."
   (magh-api--search context 'prs "" callback errback force
-                  '(:author "@me")))
+                  '(:author "@me" :state "open")))
 
 ;;; Repository
 
@@ -531,6 +532,8 @@ HEADERS is a list of complete header strings."
      (append (list "issue" "edit" (number-to-string number))
              (magh-api--flag "--title" (plist-get values :title))
              (magh-api--flag "--milestone" (plist-get values :milestone))
+             (when (plist-get values :remove-milestone)
+               '("--remove-milestone"))
              (magh-api--repeated-flags "--add-assignee"
                                      (plist-get values :add-assignees))
              (magh-api--repeated-flags "--remove-assignee"
@@ -876,6 +879,8 @@ degrades to readable and replyable threads without resolution capabilities."
              (magh-api--flag "--title" (plist-get values :title))
              (magh-api--flag "--base" (plist-get values :base))
              (magh-api--flag "--milestone" (plist-get values :milestone))
+             (when (plist-get values :remove-milestone)
+               '("--remove-milestone"))
              (magh-api--repeated-flags "--add-reviewer"
                                      (plist-get values :add-reviewers))
              (magh-api--repeated-flags "--remove-reviewer"
@@ -1623,16 +1628,27 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
     (context query variables callback errback)
   "Run GraphQL QUERY with VARIABLES alist."
   (setq context (magh-api--context context))
-  (magh-api--read-json
-   context
-   (append (list "api" "graphql" "-f" (concat "query=" query))
-           (seq-mapcat
-            (lambda (entry)
-              (list "-F" (format "%s=%s" (car entry) (cdr entry))))
-            variables))
-   callback errback
-   :domain (magh-api--domain context 'graphql (sxhash-equal query))
-   :preserve-false t))
+  (let* ((argv
+          (append (list "api" "graphql" "-f" (concat "query=" query))
+                  (seq-mapcat
+                   (lambda (entry)
+                     (list "-F" (format "%s=%s" (car entry) (cdr entry))))
+                   variables)))
+         (mutation-p
+          (string-match-p
+           "\\`[[:space:]]*\\(?:#[^\n]*\n[[:space:]]*\\)*mutation\\_>"
+           query)))
+    (if mutation-p
+        (magh-api--mutate-json
+         context argv
+         (append (list :host (magh-context-host context))
+                 (when (magh-context-repository context)
+                   (list :repository (magh-context-repository context))))
+         callback errback :preserve-false t)
+      (magh-api--read-json
+       context argv callback errback
+       :domain (magh-api--domain context 'graphql (sxhash-equal query))
+       :preserve-false t))))
 
 (provide 'magh-api)
 ;;; magh-api.el ends here

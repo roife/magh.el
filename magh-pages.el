@@ -129,19 +129,19 @@
     (insert "\n")
     (magh-ui--section (notifications 'notifications
                                    (magh-resource-create 'notification-list context) t)
-      (format "Notifications (%d)" (length notifications))
+      "Notifications"
       (dolist (item notifications)
         (magh-pages--insert-notification context item)))
     (magh-ui--section (status 'status nil nil)
       "Status"
       (magh-ui--section (review-requests 'review-requests nil nil)
-        (format "Review requests (%d)" (length review-requests))
+        "Review requests"
         (dolist (item review-requests) (magh-pages--insert-topic context 'pr item)))
       (magh-ui--section (assigned-issues 'assigned-issues nil nil)
-        (format "Assigned issues (%d)" (length assigned-issues))
+        "Assigned issues"
         (dolist (item assigned-issues) (magh-pages--insert-topic context 'issue item)))
       (magh-ui--section (assigned-prs 'assigned-prs nil nil)
-        (format "Assigned pull requests (%d)" (length assigned-prs))
+        "Assigned pull requests"
         (dolist (item assigned-prs) (magh-pages--insert-topic context 'pr item)))
       (magh-ui--section (my-prs 'my-prs nil nil)
         "My pull requests"

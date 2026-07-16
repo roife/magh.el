@@ -195,6 +195,8 @@ INDEX is encoded invisibly to keep duplicate display rows distinct."
     (prompt resources &key formatter category preview initial group sort)
   "Read one of RESOURCES and return its structured plist.
 FORMATTER receives a resource and returns display text."
+  (unless resources
+    (user-error "No GitHub resources available"))
   (let* ((formatter (or formatter #'magh-resource-title))
          (candidates
           (cl-loop for resource in resources

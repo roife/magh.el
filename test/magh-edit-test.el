@@ -19,6 +19,23 @@
       (should (= (plist-get values :count) 3))
       (should (equal body "Body")))))
 
+(ert-deftest magh-edit-decodes-blank-fields-with-field-semantics ()
+  (with-temp-buffer
+    (magh-edit-mode)
+    (setq magh-edit-fields
+          '((:name milestone)
+            (:name description :allow-empty t)
+            (:name labels :multiple t)
+            (:name draft :type boolean)
+            (:name count :type integer)))
+    (insert "milestone:   \ndescription: \nlabels: \ndraft: \ncount: \n---\n")
+    (pcase-let ((`(,values ,_body) (magh-edit--parse)))
+      (should-not (plist-get values :milestone))
+      (should (equal (plist-get values :description) ""))
+      (should-not (plist-get values :labels))
+      (should (eq (plist-get values :draft) :json-false))
+      (should-not (plist-get values :count)))))
+
 (ert-deftest magh-edit-rejects-unknown-and-missing-required-fields ()
   (with-temp-buffer
     (magh-edit-mode)
@@ -30,6 +47,7 @@
     (setq magh-edit-fields '((:name title :required t)))
     (insert "title: \n---\n")
     (pcase-let ((`(,values ,_body) (magh-edit--parse)))
+      (should-not (plist-get values :title))
       (should-error (magh-edit--validate values) :type 'magh-invalid-input))))
 
 (ert-deftest magh-edit-capf-never-starts-a-network-request ()

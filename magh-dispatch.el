@@ -44,6 +44,7 @@
 (declare-function magh-auth-switch "magh-command")
 (declare-function magh-client-clear-cache "magh-client")
 
+;;;###autoload
 (transient-define-prefix magh-dispatch ()
   "GitHub workspace."
   [["Status"

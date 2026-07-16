@@ -31,6 +31,37 @@
     (should-not (magh-core--git-output default-directory
                                      "branch" "--show-current"))))
 
+(ert-deftest magh-core-error-messages-hide-condition-internals ()
+  (let ((error (magh-core--error 'magh-command-error "Request failed"
+                                 '(:exit-code 1)))
+        reported)
+    (should (equal (magh-error-message error) "Request failed"))
+    (cl-letf (((symbol-function 'message)
+               (lambda (format-string &rest arguments)
+                 (setq reported (apply #'format format-string arguments)))))
+      (should (equal (magh-core--user-error error) "magh: Request failed")))
+    (should (equal reported "magh: Request failed"))))
+
+(ert-deftest magh-core-read-repository-prompts-only-when-needed ()
+  (let ((local (magh-context-from-repository "local/repo")) prompted)
+    (cl-letf (((symbol-function 'magh-context-resolve)
+               (lambda (&rest _) local))
+              ((symbol-function 'completing-read)
+               (lambda (&rest _) (setq prompted t) "ignored/repo")))
+      (should (eq (magh-context-read-repository) local))
+      (should-not prompted)))
+  (let ((magh-known-repositories '("known/repo")) collection)
+    (cl-letf (((symbol-function 'magh-context-resolve)
+               (lambda (&rest _) (magh-context-create :host "example.com")))
+              ((symbol-function 'completing-read)
+               (lambda (_prompt values &rest _)
+                 (setq collection values)
+                 "chosen/repo")))
+      (let ((context (magh-context-read-repository)))
+        (should (equal collection '("known/repo")))
+        (should (equal (magh-context-host context) "example.com"))
+        (should (equal (magh-context-repository context) "chosen/repo"))))))
+
 (ert-deftest magh-core-comment-count-accepts-cli-and-graphql-shapes ()
   (should (= (magh-core--comments-count
               '((commentsCount . 4) (comments . (((id . 1))))))

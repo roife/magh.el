@@ -58,7 +58,7 @@
 ;;;###autoload
 (defun magh-release-list (&optional context)
   "Select a Release in CONTEXT with native preview."
-  (interactive)
+  (interactive (list (magh-context-read-repository)))
   (setq context (magh-release--context context))
   (magh-api--release-list
    context
@@ -187,7 +187,9 @@
 (defun magh-release--fields (context &optional creating)
   "Return Release editor fields for CONTEXT."
   (append
-   '((:name tag :required t) (:name title))
+   (list '(:name tag :required t)
+         (append '(:name title)
+                 (unless creating '(:allow-empty t))))
    `((:name target
       :completion-fetch
       ,(lambda (success error)
@@ -224,7 +226,7 @@
 ;;;###autoload
 (defun magh-release-create (&optional context)
   "Create a Release in CONTEXT with a structured editor."
-  (interactive)
+  (interactive (list (magh-context-read-repository)))
   (setq context (magh-release--context context))
   (magh-release--open-create-editor context nil ""))
 

@@ -77,7 +77,7 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
 ;;;###autoload
 (defun magh-run-list (&optional context params)
   "Open recent workflow runs in CONTEXT filtered by PARAMS."
-  (interactive)
+  (interactive (list (magh-context-read-repository)))
   (setq context (magh-actions--context context))
   (magh-ui--open-page
    (format "*magh: %s · Actions*" (magh-context-repository context))
@@ -297,7 +297,7 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
 ;;;###autoload
 (defun magh-workflow-list (&optional context)
   "Select a workflow in CONTEXT with native preview."
-  (interactive)
+  (interactive (list (magh-context-read-repository)))
   (setq context (magh-actions--context context))
   (magh-api--workflow-list
    context

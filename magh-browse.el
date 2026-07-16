@@ -120,7 +120,7 @@
 ;;;###autoload
 (defun magh-browse-repository (&optional context ref path)
   "Browse repository CONTEXT remotely at REF and PATH."
-  (interactive)
+  (interactive (list (magh-context-read-repository)))
   (setq context (magh-browse--context context)
         ref (or ref (magh-context-ref context)
                 (magh-context-default-branch context) "HEAD")

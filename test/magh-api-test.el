@@ -21,6 +21,19 @@
       (should (equal (cadr (member "--repo" argv)) "acme/widgets"))
       (should (equal (cadr (member "--limit" argv)) "17")))))
 
+(ert-deftest magh-api-topic-edits-can-remove-milestones ()
+  (let ((context (magh-context-from-repository "acme/widgets")) calls)
+    (cl-letf (((symbol-function 'magh-client--mutate-text)
+               (lambda (argv _success _error &rest _keys)
+                 (push argv calls))))
+      (magh-api--issue-edit context 7 '(:remove-milestone t)
+                            #'ignore #'ignore)
+      (magh-api--pr-edit context 8 '(:remove-milestone t)
+                         #'ignore #'ignore))
+    (dolist (argv calls)
+      (should (member "--remove-milestone" argv))
+      (should-not (member "--milestone" argv)))))
+
 (ert-deftest magh-api-rest-pagination-and-fields-are-typed ()
   (should
    (equal
@@ -74,6 +87,39 @@
      (list (number-to-string magh-list-limit)
            "--json" (alist-get 'repos magh-api--search-fields)
            "--owner" "octo cat" "--state" "open")))))
+
+(ert-deftest magh-api-dashboard-searches-only-active-pull-requests ()
+  (let ((context (magh-context-create)) calls)
+    (cl-letf (((symbol-function 'magh-api--search)
+               (lambda (_context kind query _callback _errback &optional force options)
+                 (push (list kind query force options) calls))))
+      (magh-api--review-requests context #'ignore #'ignore)
+      (magh-api--my-prs context #'ignore #'ignore))
+    (should
+     (equal
+      (nreverse calls)
+      '((prs "" nil (:review-requested "@me" :state "open"))
+        (prs "" nil (:author "@me" :state "open")))))))
+
+(ert-deftest magh-api-generic-graphql-mutations-bypass-read-cache ()
+  (let ((context (magh-context-from-repository "acme/widgets" "github.com"))
+        query-call mutation-call)
+    (cl-letf (((symbol-function 'magh-api--read-json)
+               (lambda (&rest arguments) (setq query-call arguments)))
+              ((symbol-function 'magh-client--request-async)
+               (lambda (argv _success _error &rest keys)
+                 (setq mutation-call (cons argv keys)))))
+      (magh-api--graphql context "query { viewer { login } }" nil
+                         #'ignore #'ignore)
+      (magh-api--graphql context "# update\n mutation { doThing }" nil
+                         #'ignore #'ignore))
+    (should query-call)
+    (should (equal (cadr (member :preserve-false query-call)) t))
+    (should mutation-call)
+    (should-not (plist-get (cdr mutation-call) :cache))
+    (should-not (plist-get (cdr mutation-call) :dedupe))
+    (should (eq (plist-get (cdr mutation-call) :json-false-object)
+                :json-false))))
 
 (ert-deftest magh-api-release-body-uses-stdin-not-a-shell-or-temporary-file ()
   (let ((context (magh-context-from-repository "o/r")) captured)

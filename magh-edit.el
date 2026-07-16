@@ -86,7 +86,10 @@
           (signal 'magh-invalid-input
                   (list (format "%s must be an integer"
                                 (magh-edit--field-name definition)))))))
-     (t text))))
+     (t (if (and (string-empty-p text)
+                 (not (plist-get definition :allow-empty)))
+            nil
+          text)))))
 
 (defun magh-edit--insert-template (values body)
   "Insert editor template using VALUES and BODY."

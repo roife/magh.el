@@ -339,12 +339,32 @@ Release, and branch searches fetch repository data and narrow it locally."
     ((or 'actions 'releases 'branches)
      (magh-search--consult-repository-list context kind initial))))
 
-(defun magh-search-repositories () (interactive) (magh-consult-search 'repos))
-(defun magh-search-issues () (interactive) (magh-consult-search 'issues))
-(defun magh-search-prs () (interactive) (magh-consult-search 'prs))
-(defun magh-search-code () (interactive) (magh-consult-search 'code))
-(defun magh-search-commits () (interactive) (magh-consult-search 'commits))
+(defun magh-search-repositories ()
+  "Search GitHub repositories with Consult."
+  (interactive)
+  (magh-consult-search 'repos))
 
+(defun magh-search-issues ()
+  "Search GitHub Issues with Consult."
+  (interactive)
+  (magh-consult-search 'issues))
+
+(defun magh-search-prs ()
+  "Search GitHub Pull Requests with Consult."
+  (interactive)
+  (magh-consult-search 'prs))
+
+(defun magh-search-code ()
+  "Search GitHub code with Consult."
+  (interactive)
+  (magh-consult-search 'code))
+
+(defun magh-search-commits ()
+  "Search GitHub commits with Consult."
+  (interactive)
+  (magh-consult-search 'commits))
+
+;;;###autoload
 (transient-define-prefix magh-search-dispatch ()
   "Global GitHub search."
   [["Search"

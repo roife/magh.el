@@ -102,7 +102,7 @@
 ;;;###autoload
 (defun magh-commit-list (&optional context ref path)
   "Open commit history in CONTEXT, optionally restricted to REF and PATH."
-  (interactive)
+  (interactive (list (magh-context-read-repository)))
   (setq context (magh-commit--context context)
         ref (or ref (magh-context-ref context)))
   (let ((params (list :ref ref :path path :limit magh-list-limit)))

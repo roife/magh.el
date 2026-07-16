@@ -63,8 +63,10 @@ parsed from a local Git remote takes precedence for that repository."
   "Repositories used as sources for workflow templates."
   :type '(repeat string))
 
-(defcustom magh-view-inline-images t
-  "Whether remote images in rendered GitHub Markdown are fetched asynchronously."
+(defcustom magh-view-inline-images nil
+  "Whether remote images in rendered GitHub Markdown are fetched asynchronously.
+Remote Markdown can reference arbitrary HTTP(S) hosts, so images are disabled
+by default to avoid unsolicited network requests."
   :type 'boolean)
 
 (defcustom magh-view-inline-image-max-width 640
@@ -173,11 +175,15 @@ When nil, use `default-directory'."
 
 (defun magh-error-message (error)
   "Return a user-facing message for typed ERROR."
-  (error-message-string error))
+  (if (and (consp error)
+           (memq 'magh-error (get (car error) 'error-conditions))
+           (stringp (cadr error)))
+      (cadr error)
+    (error-message-string error)))
 
 (defun magh-core--user-error (error)
-  "Raise typed ERROR as a `user-error'."
-  (user-error "%s" (magh-error-message error)))
+  "Report typed ERROR from an asynchronous command callback."
+  (message "magh: %s" (magh-error-message error)))
 
 ;;; Context
 
@@ -320,6 +326,18 @@ be inferred.  This operation performs local Git inspection only."
       (signal 'magh-invalid-input
               (list "No GitHub repository could be inferred; specify OWNER/NAME")))
     context))
+
+(defun magh-context-read-repository (&optional prompt)
+  "Return the current repository context, prompting with PROMPT when needed.
+Repository names from `magh-known-repositories' are offered as completions,
+but any OWNER/NAME value is accepted."
+  (let ((context (magh-context-resolve)))
+    (if (magh-context-repository context)
+        context
+      (magh-context-from-repository
+       (completing-read (or prompt "Repository (OWNER/NAME): ")
+                        magh-known-repositories nil nil)
+       (magh-context-host context)))))
 
 (defun magh-context-web-url (context &optional suffix)
   "Return the web URL for CONTEXT, optionally followed by SUFFIX."

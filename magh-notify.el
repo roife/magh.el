@@ -138,6 +138,7 @@ UNREAD-ONLY defaults to `magh-notifications-unread-only'."
           ('state 'date) ('date nil) (_ 'repository)))
   (magh-notifications magh-notifications-unread-only))
 
+;;;###autoload
 (transient-define-prefix magh-notifications-dispatch ()
   "Notification selection and settings."
   [["Open"

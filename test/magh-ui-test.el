@@ -432,11 +432,13 @@
                           (eq (oref section type) 'repositories))
                         (oref magit-root-section children)))
              (repository (car (oref repositories children))))
-        (should (string-match-p "My pull requests\n" (buffer-string)))
-        (should (string-match-p "Repositories\n" (buffer-string)))
-        (should-not (string-match-p
-                     "\\(?:My pull requests\\|Repositories\\) ("
-                     (buffer-string)))
+        (dolist (heading '("Notifications" "Review requests" "Assigned issues"
+                           "Assigned pull requests" "My pull requests"
+                           "Repositories"))
+          (should (string-match-p (concat (regexp-quote heading) "\n")
+                                  (buffer-string)))
+          (should-not (string-match-p (concat (regexp-quote heading) " (")
+                                      (buffer-string))))
         (should (string-match-p "public o/r\n" (buffer-string)))
         (should-not (string-match-p "ADMIN\\|Updated: updated" (buffer-string)))
         (let ((inhibit-read-only t))
@@ -1275,19 +1277,59 @@
          (magh-commit--review-drafts (make-hash-table :test #'equal))
          (key (magh-commit--review-key context 7 "HEAD"))
          (draft '(:id 1 :path "src/a.el" :line 1 :side "RIGHT"
-                  :subject-type "LINE" :body "Keep me")))
+                  :subject-type "LINE" :body "Keep me"))
+         reported)
     (puthash key (list draft) magh-commit--review-drafts)
     (cl-letf (((symbol-function 'magh-api--pr-review)
                (lambda (_context _number _event _body _comments
                         _callback errback &optional _head)
                  (funcall errback
-                          (magh-core--error 'magh-api-error "Review failed")))))
+                          (magh-core--error 'magh-api-error "Review failed"))))
+              ((symbol-function 'message)
+               (lambda (format-string &rest arguments)
+                 (setq reported (apply #'format format-string arguments)))))
       (let ((magh-buffer-context context)
             (magh-commit--review-number 7)
             (magh-commit--review-head "HEAD"))
-        (should-error (magh-commit-review-submit 'approve "")
-                      :type 'user-error)))
+        (magh-commit-review-submit 'approve "")))
+    (should (equal reported "magh: Review failed"))
     (should (equal (gethash key magh-commit--review-drafts) (list draft)))))
+
+(ert-deftest magh-topic-editors-remove-cleared-milestones ()
+  (let ((context (magh-context-from-repository "o/r")) submit changes)
+    (cl-letf (((symbol-function 'magh-edit-open)
+               (lambda (_name _fields _values _body submit-function &rest _)
+                 (setq submit submit-function)))
+              ((symbol-function 'magh-api--issue-edit)
+               (lambda (_context _number values _success _error)
+                 (setq changes values))))
+      (magh-issue--open-edit-editor
+       context 7
+       '((title . "Issue") (body . "Body")
+         (milestone . ((title . "Version 1")))))
+      (funcall submit
+               '(:title "Issue" :assignees nil :labels nil
+                 :milestone nil :projects nil)
+               "Body" #'ignore #'ignore))
+    (should (plist-get changes :remove-milestone))
+    (should-not (plist-member changes :milestone)))
+  (let ((context (magh-context-from-repository "o/r")) submit changes)
+    (cl-letf (((symbol-function 'magh-edit-open)
+               (lambda (_name _fields _values _body submit-function &rest _)
+                 (setq submit submit-function)))
+              ((symbol-function 'magh-api--pr-edit)
+               (lambda (_context _number values _success _error)
+                 (setq changes values))))
+      (magh-pr--open-edit-editor
+       context 8
+       '((title . "PR") (body . "Body") (baseRefName . "main")
+         (milestone . ((title . "Version 1")))))
+      (funcall submit
+               '(:title "PR" :base "main" :reviewers nil :assignees nil
+                 :labels nil :milestone nil :projects nil)
+               "Body" #'ignore #'ignore))
+    (should (plist-get changes :remove-milestone))
+    (should-not (plist-member changes :milestone))))
 
 (provide 'magh-ui-test)
 ;;; magh-ui-test.el ends here

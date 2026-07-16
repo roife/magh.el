@@ -94,7 +94,7 @@
 ;;;###autoload
 (defun magh-issue-list (&optional context state params)
   "Open an asynchronous Issue list for CONTEXT, STATE, and PARAMS."
-  (interactive)
+  (interactive (list (magh-context-read-repository)))
   (setq context (magh-issue--context context)
         state (or state magh-default-issue-state))
   (let ((limit (or (plist-get params :limit) magh-list-limit)))
@@ -328,7 +328,7 @@
 ;;;###autoload
 (defun magh-issue-create (&optional context)
   "Create an Issue in CONTEXT, using a remote template when available."
-  (interactive)
+  (interactive (list (magh-context-read-repository)))
   (setq context (magh-issue--context context))
   (message "Fetching Issue templates…")
   (magh-api--content-get
@@ -353,8 +353,14 @@
      (magh-issue--editor-fields context) original
      (alist-get 'body data)
      (lambda (values body success error)
-       (let ((changes (list :title (plist-get values :title) :body body
-                            :milestone (plist-get values :milestone))))
+       (let* ((old-milestone (plist-get original :milestone))
+              (new-milestone (plist-get values :milestone))
+              (changes (list :title (plist-get values :title) :body body)))
+         (unless (equal old-milestone new-milestone)
+           (setq changes
+                 (if new-milestone
+                     (plist-put changes :milestone new-milestone)
+                   (plist-put changes :remove-milestone t))))
          (dolist (spec '((:assignees :add-assignees :remove-assignees)
                          (:labels :add-labels :remove-labels)
                          (:projects :add-projects :remove-projects)))

@@ -2,6 +2,7 @@
 
 (require 'magh-test-helper)
 (require 'magh-core-test)
+(require 'magh-candidate-test)
 (require 'magh-client-test)
 (require 'magh-api-test)
 (require 'magh-edit-test)

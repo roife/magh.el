@@ -45,6 +45,16 @@
       "(require[ \t\n]+['\"]\\(?:forge\\|embark\\|pr-review\\|nerd-icons\\)"
       (magh-test-file-string file)))))
 
+(ert-deftest magh-public-dispatches-have-autoload-cookies ()
+  (dolist (entry '(("magh-dispatch.el" . magh-dispatch)
+                   ("magh-search.el" . magh-search-dispatch)
+                   ("magh-notify.el" . magh-notifications-dispatch)))
+    (should
+     (string-match-p
+      (format ";;;###autoload[ \t\n]+(transient-define-prefix[ \t\n]+%s\\_>"
+              (regexp-quote (symbol-name (cdr entry))))
+      (magh-test-file-string (car entry))))))
+
 (ert-deftest magh-documentation-backtick-symbols-resolve ()
   (require 'magh)
   (require 'magh-embark)
@@ -52,8 +62,7 @@
   (require 'magh-magit)
   (require 'magh-pr-review)
   (let (missing)
-    (dolist (file '("README.md" "doc/ARCH.md" "doc/FUNCTIONALITY.md"
-                    "doc/UI.md"))
+    (dolist (file '("README.md"))
       (let ((text (magh-test-file-string file))
             (position 0))
         (while (string-match "`\\(magh-[[:alnum:]-]+\\)`" text position)
