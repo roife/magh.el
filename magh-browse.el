@@ -57,10 +57,6 @@
   :keymap magh-remote-file-mode-map
   (setq buffer-read-only magh-remote-file-mode))
 
-(defun magh-browse--context (&optional context)
-  "Resolve repository CONTEXT for browsing."
-  (magh-context-resolve (or context magh-buffer-context) t))
-
 (defun magh-browse--buffer-name (context ref path)
   "Return remote tree buffer name for CONTEXT, REF, and PATH."
   (format "*magh: %s · %s:%s*" (magh-context-repository context)
@@ -121,7 +117,7 @@
 (defun magh-browse-repository (&optional context ref path)
   "Browse repository CONTEXT remotely at REF and PATH."
   (interactive (list (magh-context-read-repository)))
-  (setq context (magh-browse--context context)
+  (setq context (magh-ui--repository-context context)
         ref (or ref (magh-context-ref context)
                 (magh-context-default-branch context) "HEAD")
         path (or path (magh-context-path context) ""))
@@ -171,13 +167,13 @@
   (let ((directory
          (file-name-directory (directory-file-name magh-browse--path))))
     (magh-browse-repository
-     (magh-browse--context) magh-browse--ref
+     (magh-ui--repository-context) magh-browse--ref
      (if directory (directory-file-name directory) ""))))
 
 (defun magh-browse-select-ref ()
   "Asynchronously select a branch or tag and reopen the current path."
   (interactive)
-  (let ((context (magh-browse--context))
+  (let ((context (magh-ui--repository-context))
         (path magh-browse--path))
     (magh-core--collect-async
      (list
@@ -264,7 +260,7 @@
 
 (defun magh-browse-file (context path ref &optional line)
   "Open remote PATH at REF and optional LINE in CONTEXT."
-  (setq context (magh-browse--context context)
+  (setq context (magh-ui--repository-context context)
         ref (or ref (magh-context-ref context) "HEAD"))
   (let ((buffer (get-buffer-create
                  (magh-browse--buffer-name context ref path))))
@@ -289,7 +285,7 @@
 (defun magh-repo-clone-temporary (&optional context)
   "Shallow clone repository CONTEXT into a tracked temporary directory."
   (interactive)
-  (setq context (magh-browse--context context))
+  (setq context (magh-ui--repository-context context))
   (make-directory magh-temporary-clone-directory t)
   (let* ((base (replace-regexp-in-string
                 "/" "--" (magh-context-repository context)))

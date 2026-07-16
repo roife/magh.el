@@ -22,10 +22,6 @@
 (defvar-local magh-actions--run-id nil)
 (defvar-local magh-actions--workflow-id nil)
 
-(defun magh-actions--context (&optional context)
-  "Resolve repository CONTEXT for Actions."
-  (magh-context-resolve (or context magh-buffer-context) t))
-
 (defun magh-actions--run-resource (context data)
   "Create Run resource from DATA."
   (magh-resource-create
@@ -78,7 +74,7 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
 (defun magh-run-list (&optional context params)
   "Open recent workflow runs in CONTEXT filtered by PARAMS."
   (interactive (list (magh-context-read-repository)))
-  (setq context (magh-actions--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (format "*magh: %s · Actions*" (magh-context-repository context))
    context 'run-list (magh-context-repository context)
@@ -177,7 +173,7 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
 (defun magh-run-view (id &optional context preview)
   "Open workflow Run ID in CONTEXT."
   (interactive (list (read-number "Run ID: ")))
-  (setq context (magh-actions--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (if preview
        (format "*magh preview: %s · Run %s*"
@@ -232,7 +228,7 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
 (defun magh-run-log (&optional context id job-id)
   "Open complete log for Run ID, optionally restricted to JOB-ID."
   (interactive)
-  (setq context (magh-actions--context context)
+  (setq context (magh-ui--repository-context context)
         id (or id magh-actions--run-id
                (plist-get magh-actions--dispatch-resource :id)))
   (let ((buffer (magh-actions--text-buffer
@@ -257,7 +253,7 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
 (defun magh-run-watch (&optional context id)
   "Watch Run ID without blocking Emacs."
   (interactive)
-  (setq context (magh-actions--context context)
+  (setq context (magh-ui--repository-context context)
         id (or id magh-actions--run-id
                (plist-get magh-actions--dispatch-resource :id)))
   (let ((buffer (magh-actions--text-buffer
@@ -298,7 +294,7 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
 (defun magh-workflow-list (&optional context)
   "Select a workflow in CONTEXT with native preview."
   (interactive (list (magh-context-read-repository)))
-  (setq context (magh-actions--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-api--workflow-list
    context
    (lambda (items)
@@ -372,7 +368,7 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
 (defun magh-workflow-view (workflow &optional context ref preview)
   "Open WORKFLOW details in CONTEXT at REF."
   (interactive (list (read-string "Workflow ID, name, or path: ")))
-  (setq context (magh-actions--context context)
+  (setq context (magh-ui--repository-context context)
         ref (or ref (magh-context-ref context)
                 (magh-context-default-branch context) "HEAD"))
   (magh-ui--open-page
@@ -395,20 +391,20 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
 (defun magh-run-rerun (&optional failed-only context id)
   "Rerun Run ID; with FAILED-ONLY, rerun only failed jobs."
   (interactive "P")
-  (setq context (magh-actions--context context)
+  (setq context (magh-ui--repository-context context)
         id (or id magh-actions--run-id
                (plist-get magh-actions--dispatch-resource :id)))
   (magh-api--run-rerun
    context id failed-only
    (lambda (_) (message "Rerun requested for %s" id)
-     (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+     (magh-ui--refresh-if-page))
    #'magh-core--user-error))
 
 ;;;###autoload
 (defun magh-run-rerun-job (&optional context job-id)
   "Choose or rerun JOB-ID in the current run."
   (interactive)
-  (setq context (magh-actions--context context))
+  (setq context (magh-ui--repository-context context))
   (let* ((resource (magh-ui-resource-at-point))
          (job-id (or job-id (and (eq (plist-get resource :kind) 'job)
                                   (plist-get resource :id)))))
@@ -430,38 +426,36 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
 (defun magh-run-cancel (&optional context id)
   "Cancel Run ID."
   (interactive)
-  (setq context (magh-actions--context context)
+  (setq context (magh-ui--repository-context context)
         id (or id magh-actions--run-id
                (plist-get magh-actions--dispatch-resource :id)))
   (when (magh-core--confirm (format "Cancel Actions run %s? " id))
     (magh-api--run-cancel
      context id (lambda (_) (message "Cancelled run %s" id)
-                  (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+                  (magh-ui--refresh-if-page))
      #'magh-core--user-error)))
 
 (defun magh-workflow-toggle (&optional disable context workflow)
   "Enable WORKFLOW, or DISABLE with prefix argument."
   (interactive "P")
-  (setq context (magh-actions--context context)
+  (setq context (magh-ui--repository-context context)
         workflow (or workflow magh-actions--workflow-id))
   (magh-api--workflow-enable
    context workflow (not disable)
    (lambda (_) (message "Workflow %s" (if disable "disabled" "enabled"))
-     (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+     (magh-ui--refresh-if-page))
    #'magh-core--user-error))
 
 (defun magh-workflow-dispatch-run (&optional context workflow)
   "Manually dispatch WORKFLOW with arbitrary key=value inputs."
   (interactive)
-  (setq context (magh-actions--context context)
+  (setq context (magh-ui--repository-context context)
         workflow (or workflow magh-actions--workflow-id))
   (let ((ref (read-string "Ref: " (or (magh-context-ref context) "main")))
         inputs input)
     (while (not (string-empty-p
                  (setq input (read-string "Input key=value (empty to finish): "))))
-      (unless (string-match "\\`\\([^=]+\\)=\\(.*\\)\\'" input)
-        (user-error "Expected key=value"))
-      (push (cons (match-string 1 input) (match-string 2 input)) inputs))
+      (push (magh-core--parse-key-value input) inputs))
     (magh-api--workflow-dispatch
      context workflow ref (nreverse inputs)
      (lambda (_) (message "Workflow dispatched at %s" ref))

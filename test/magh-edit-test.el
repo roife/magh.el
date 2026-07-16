@@ -61,5 +61,18 @@
       (should capf)
       (should (equal (nth 2 capf) '("bug" "feature"))))))
 
+(ert-deftest magh-edit-completion-fetcher-extracts-one-field ()
+  (let ((context 'repository-context) values failure)
+    (funcall
+     (magh-edit--completion-fetcher
+      (lambda (actual-context success _error)
+        (should (eq actual-context context))
+        (funcall success '(((name . "main")) ((name . "topic")))))
+      context 'name)
+     (lambda (items) (setq values items))
+     (lambda (error) (setq failure error)))
+    (should (equal values '("main" "topic")))
+    (should-not failure)))
+
 (provide 'magh-edit-test)
 ;;; magh-edit-test.el ends here

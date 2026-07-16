@@ -360,6 +360,12 @@ but any OWNER/NAME value is accepted."
   "URL-encode every component in PATH while retaining slashes."
   (mapconcat #'url-hexify-string (split-string path "/" t) "/"))
 
+(defun magh-core--parse-key-value (text)
+  "Parse TEXT as KEY=VALUE and return a cons cell."
+  (unless (string-match "\\`\\([^=]+\\)=\\(.*\\)\\'" text)
+    (user-error "Expected key=value: %s" text))
+  (cons (match-string 1 text) (match-string 2 text)))
+
 ;;; Display helpers
 
 (defun magh-date-relative (timestamp)

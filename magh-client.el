@@ -152,10 +152,7 @@
                     (magh-client--request-stderr-buffer request)))))
          (subscribers (reverse (magh-client--request-subscribers request)))
          result error)
-    (when (equal (gethash (magh-client--request-key request)
-                          magh-client--inflight)
-                 request)
-      (remhash (magh-client--request-key request) magh-client--inflight))
+    (remhash (magh-client--request-key request) magh-client--inflight)
     (cond
      ((magh-client--request-cancelled request)
       (setq error (magh-core--error 'magh-cancelled "GitHub request was cancelled")))

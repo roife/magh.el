@@ -25,6 +25,11 @@
 (ert-deftest magh-core-url-path-encodes-components-not-slashes ()
   (should (equal (magh-core--url-path "dir/a b#.el") "dir/a%20b%23.el")))
 
+(ert-deftest magh-core-key-value-parser-keeps-value-equals-signs ()
+  (should (equal (magh-core--parse-key-value "query=a=b")
+                 '("query" . "a=b")))
+  (should-error (magh-core--parse-key-value "missing") :type 'user-error))
+
 (ert-deftest magh-core-empty-git-output-is-absent ()
   (cl-letf (((symbol-function 'executable-find) (lambda (_) "/usr/bin/git"))
             ((symbol-function 'process-file) (lambda (&rest _) 0)))

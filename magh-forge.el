@@ -60,7 +60,8 @@
       (cl-pushnew url magh-forge--added-repositories :test #'equal)
       ;; This entry exists to import individually selected topics, not to
       ;; maintain a full duplicate of magh.el's API cache.
-      (eieio-oset repo 'selective-p t))
+      (let ((slot 'selective-p))
+        (eieio-oset repo slot t)))
     repo))
 
 (defun magh-forge--topic (repo kind number)

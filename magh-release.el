@@ -22,10 +22,6 @@
 (defvar-local magh-release--tag nil)
 (defvar-local magh-release--dispatch-resource nil)
 
-(defun magh-release--context (&optional context)
-  "Resolve repository CONTEXT for Release commands."
-  (magh-context-resolve (or context magh-buffer-context) t))
-
 (defun magh-release--resource (context data)
   "Create Release resource from DATA."
   (let ((tag (alist-get 'tagName data)))
@@ -59,7 +55,7 @@
 (defun magh-release-list (&optional context)
   "Select a Release in CONTEXT with native preview."
   (interactive (list (magh-context-read-repository)))
-  (setq context (magh-release--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-api--release-list
    context
    (lambda (items)
@@ -144,7 +140,7 @@
 (defun magh-release-view (tag &optional context preview)
   "Open Release TAG in CONTEXT."
   (interactive (list (read-string "Release tag: ")))
-  (setq context (magh-release--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (if preview
        (format "*magh preview: %s · %s*" (magh-context-repository context) tag)
@@ -157,7 +153,7 @@
 
 (defun magh-release-view-id (id &optional context preview)
   "Open Release numeric ID in CONTEXT, as used by notifications."
-  (setq context (magh-release--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (if preview
        (format "*magh preview: %s · Release %s*"
@@ -222,7 +218,7 @@
 (defun magh-release-create (&optional context)
   "Create a Release in CONTEXT with a structured editor."
   (interactive (list (magh-context-read-repository)))
-  (setq context (magh-release--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-release--open-create-editor context nil ""))
 
 (defun magh-release-create-generated (tag target &optional context)
@@ -232,7 +228,7 @@
                                   (or (and magh-buffer-context
                                            (magh-context-default-branch
                                             magh-buffer-context)) "main"))))
-  (setq context (magh-release--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-api--release-generate-notes
    context tag target nil
    (lambda (data)
@@ -264,7 +260,7 @@
 (defun magh-release-edit (&optional context tag)
   "Edit Release TAG in CONTEXT."
   (interactive)
-  (setq context (magh-release--context context)
+  (setq context (magh-ui--repository-context context)
         tag (or tag magh-release--tag (read-string "Release tag: ")))
   (if (and (eq magh-buffer-resource-kind 'release)
            (equal magh-buffer-resource-id tag) magh-ui--data)
@@ -287,31 +283,31 @@
   "Publish draft Release TAG."
   (interactive)
   (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-release--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           tag (or tag current-tag))
     (magh-api--release-edit
      context tag '(:draft :json-false)
      (lambda (_) (message "Published %s" tag)
-       (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+       (magh-ui--refresh-if-page))
      #'magh-core--user-error)))
 
 (defun magh-release-mark-latest (&optional context tag)
   "Mark Release TAG as latest."
   (interactive)
   (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-release--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           tag (or tag current-tag))
     (magh-api--release-edit
      context tag '(:latest t)
      (lambda (_) (message "%s is now latest" tag)
-       (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+       (magh-ui--refresh-if-page))
      #'magh-core--user-error)))
 
 (defun magh-release-toggle-prerelease (&optional context tag)
   "Toggle prerelease state for Release TAG."
   (interactive)
   (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-release--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           tag (or tag current-tag))
     (magh-api--release-get
      context tag
@@ -320,7 +316,7 @@
          (magh-api--release-edit
           context tag (list :prerelease (or enable :json-false))
           (lambda (_) (message "Prerelease %s" (if enable "enabled" "disabled"))
-            (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+            (magh-ui--refresh-if-page))
           #'magh-core--user-error)))
      #'magh-core--user-error)))
 
@@ -328,7 +324,7 @@
   "Delete Release TAG."
   (interactive)
   (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-release--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           tag (or tag current-tag))
     (when (magh-core--confirm (format "Delete Release %s? " tag))
       (magh-api--release-delete
@@ -339,7 +335,7 @@
   "Download assets from Release TAG matching PATTERNS into DIRECTORY."
   (interactive)
   (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-release--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           tag (or tag current-tag)
           patterns (or patterns
                        (let ((text (read-string "Asset glob (empty for all): ")))
@@ -359,12 +355,12 @@
   "Upload FILES to Release TAG, replacing assets when CLOBBER."
   (interactive (list (list (read-file-name "Asset: ")) current-prefix-arg))
   (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-release--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           tag (or tag current-tag))
     (magh-api--release-upload
      context tag files clobber
      (lambda (_) (message "Uploaded %d asset(s)" (length files))
-       (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+       (magh-ui--refresh-if-page))
      #'magh-core--user-error)))
 
 (transient-define-prefix magh-release-dispatch ()

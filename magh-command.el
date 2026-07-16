@@ -38,12 +38,8 @@ ARGV is a list of strings.  No shell evaluates the command."
 (defun magh-command--parse-fields (text)
   "Parse comma-separated key=value TEXT into an alist."
   (unless (string-empty-p text)
-    (mapcar
-     (lambda (field)
-       (unless (string-match "\\`\\([^=]+\\)=\\(.*\\)\\'" field)
-         (user-error "Expected key=value field: %s" field))
-       (cons (match-string 1 field) (match-string 2 field)))
-     (split-string text "," t "[ \t\n]+"))))
+    (mapcar #'magh-core--parse-key-value
+            (split-string text "," t "[ \t\n]+"))))
 
 (defun magh-command--json-string (data)
   "Serialize DATA as pretty JSON."

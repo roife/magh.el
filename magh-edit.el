@@ -239,8 +239,7 @@ receives values, body, success, and error callbacks."
            (kill-buffer buffer)))
        (when (buffer-live-p source)
          (with-current-buffer source
-           (when (derived-mode-p 'magh-section-mode)
-             (magh-ui-refresh t)))))
+           (magh-ui--refresh-if-page))))
      (lambda (error)
        (when (buffer-live-p buffer)
          (with-current-buffer buffer

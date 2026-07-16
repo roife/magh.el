@@ -20,10 +20,6 @@
 (require 'magh-edit)
 (require 'magh-ui)
 
-(defun magh-repo--context (&optional value)
-  "Resolve VALUE as a required repository context."
-  (magh-context-resolve (or value magh-buffer-context) t))
-
 (defun magh-repo--buffer-name (context &optional suffix)
   "Return native repository buffer name for CONTEXT and SUFFIX."
   (format "*magh: %s%s*" (magh-context-repository context)
@@ -202,7 +198,7 @@
                      (magh-core--name (alist-get 'author commit))))
          (resource (magh-resource-create
                     'commit context :sha sha
-                    :title (car (split-string message "\n"))
+                    :title (car (string-lines message))
                     :url (alist-get 'html_url data))))
     (magh-ui--section (commit sha resource t)
       (magh-ui--row
@@ -367,7 +363,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
 (defun magh-repo-status (&optional context)
   "Open a Magit-like status page for repository CONTEXT."
   (interactive)
-  (setq context (magh-repo--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (magh-repo--buffer-name context) context 'repository
    (magh-context-repository context)
@@ -432,7 +428,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
 (defun magh-statistics (&optional context)
   "Open repository statistics for CONTEXT."
   (interactive)
-  (setq context (magh-repo--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (magh-repo--buffer-name context "Statistics") context 'statistics
    (magh-context-repository context)
@@ -502,7 +498,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
 (defun magh-repository-settings-edit (&optional context)
   "Asynchronously fetch and edit repository settings for CONTEXT."
   (interactive)
-  (setq context (magh-repo--context context))
+  (setq context (magh-ui--repository-context context))
   (message "Fetching repository settings…")
   (magh-api--repo-get
    context
@@ -553,7 +549,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
           (directory (read-directory-name "Clone into: " nil nil nil
                                            (file-name-nondirectory repo))))
      (list repo directory)))
-  (let ((context (magh-repo--context repository)))
+  (let ((context (magh-ui--repository-context repository)))
     (message "Cloning %s…" (magh-context-repository context))
     (magh-api--repo-clone
      context directory
@@ -566,7 +562,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
 (defun magh-repository-fork (&optional context)
   "Asynchronously fork repository CONTEXT."
   (interactive)
-  (setq context (magh-repo--context context))
+  (setq context (magh-ui--repository-context context))
   (when (magh-core--confirm (format "Fork %s? " (magh-context-repository context)))
     (magh-api--repo-fork
      context nil
@@ -579,7 +575,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
 (defun magh-repository-rename (name &optional context)
   "Rename repository CONTEXT to NAME."
   (interactive (list (read-string "New repository name: ")))
-  (setq context (magh-repo--context context))
+  (setq context (magh-ui--repository-context context))
   (when (magh-core--confirm
          (format "Rename %s to %s? " (magh-context-repository context) name))
     (magh-api--repo-rename
@@ -595,7 +591,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
 (defun magh-repository-delete (&optional context)
   "Permanently delete repository CONTEXT."
   (interactive)
-  (setq context (magh-repo--context context))
+  (setq context (magh-ui--repository-context context))
   (let ((repo (magh-context-repository context)))
     (when (and (magh-core--confirm (format "Permanently delete %s? " repo))
                (or (not magh-confirm-destructive-actions)
@@ -612,7 +608,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
                                   (or (and magh-buffer-context
                                            (magh-context-ref magh-buffer-context))
                                       "HEAD"))))
-  (setq context (magh-repo--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-api--commit-get
    context ref
    (lambda (commit)
@@ -626,7 +622,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
 (defun magh-branch-delete (branch &optional context)
   "Delete remote BRANCH in repository CONTEXT."
   (interactive (list (read-string "Delete remote branch: ")))
-  (setq context (magh-repo--context context))
+  (setq context (magh-ui--repository-context context))
   (when (magh-core--confirm (format "Delete remote branch %s? " branch))
     (magh-api--branch-delete
      context branch (lambda (_) (message "Deleted branch %s" branch))

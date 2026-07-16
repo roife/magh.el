@@ -118,6 +118,10 @@
 (defvar-local magh-ui--generation 0)
 (defvar-local magh-ui--data nil)
 
+(defun magh-ui--repository-context (&optional context)
+  "Resolve CONTEXT or the current page's required repository context."
+  (magh-context-resolve (or context magh-buffer-context) t))
+
 (defvar magh-ui--visibility-cache (make-hash-table :test #'equal)
   "Visibility snapshots for pages reopened during this Emacs session.")
 
@@ -130,7 +134,7 @@
   "o" #'magh-ui-browse
   "w" #'magh-ui-copy-url
   "." #'magh-ui-dispatch
-  "?" #'magh-ui-main-dispatch)
+  "?" #'magh-dispatch)
 
 (defvar-keymap magh-ui-image-map
   :doc "Keymap placed on asynchronously loaded Markdown images."
@@ -309,7 +313,12 @@ With FORCE non-nil (interactively, a prefix argument), bypass completed cache."
          (setq header-line-format nil)
          (magh-ui--render-error error state)
          (run-hooks 'magh-post-refresh-hook)))
-     (and force t))))
+     force)))
+
+(defun magh-ui--refresh-if-page ()
+  "Refresh the current buffer when it is a native magh.el page."
+  (when (derived-mode-p 'magh-section-mode)
+    (magh-ui-refresh t)))
 
 (cl-defun magh-ui--open-page
     (name context kind id fetch render &key preview setup)
@@ -368,11 +377,6 @@ non-nil, runs in the page buffer after mode initialization."
      (action (funcall action resource))
      (magh-buffer-dispatch-function (funcall magh-buffer-dispatch-function))
      (t (user-error "No contextual actions for this page")))))
-
-(defun magh-ui-main-dispatch ()
-  "Open the top-level magh.el dispatch menu."
-  (interactive)
-  (call-interactively #'magh-dispatch))
 
 (defun magh-ui-quit ()
   "Leave the current magh.el page using `magh-bury-buffer-function'."

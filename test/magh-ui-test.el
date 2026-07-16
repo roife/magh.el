@@ -462,6 +462,37 @@
            nil)
           "12 stars, 3 forks, 4 watchers")))
 
+(ert-deftest magh-repository-settings-values-preserve-json-booleans ()
+  (let ((values (magh-repo--settings-values
+                 '((visibility . "PUBLIC")
+                   (isTemplate . t)
+                   (hasIssuesEnabled . :json-false)))))
+    (should (eq (plist-get values :template) t))
+    (should (eq (plist-get values :issues) :json-false))
+    (should (eq (plist-get values :wiki) :json-false))))
+
+(ert-deftest magh-repository-clone-allows-an-existing-empty-directory ()
+  (let ((directory (make-temp-file "magh-clone-test-" t)) captured)
+    (unwind-protect
+        (cl-letf (((symbol-function 'magh-api--repo-clone)
+                   (lambda (_context target _success _error &optional _arguments)
+                     (setq captured target))))
+          (magh-repository-clone "o/r" directory)
+          (should (equal captured directory)))
+      (delete-directory directory t))))
+
+(ert-deftest magh-temporary-clone-keeps-its-reserved-directory ()
+  (let ((root (make-temp-file "magh-temporary-clone-test-" t)) captured)
+    (unwind-protect
+        (let ((magh-temporary-clone-directory root))
+          (cl-letf (((symbol-function 'magh-api--repo-clone)
+                     (lambda (_context target _success _error &optional _arguments)
+                       (setq captured target))))
+            (magh-repo-clone-temporary
+             (magh-context-from-repository "o/r")))
+          (should (file-directory-p captured)))
+      (delete-directory root t))))
+
 (ert-deftest magh-ui-comment-sections-have-a-blank-line-between-siblings ()
   (with-temp-buffer
     (magit-section-mode)
@@ -757,6 +788,27 @@
             (should (string-match-p "value=new" (buffer-string)))
             (should-not (string-match-p "value=old" (buffer-string))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest magh-ui-shared-context-prefers-explicit-context ()
+  (let ((page (magh-context-from-repository "page/repo"))
+        (explicit (magh-context-from-repository "explicit/repo")))
+    (with-temp-buffer
+      (setq-local magh-buffer-context page)
+      (should (eq (magh-ui--repository-context) page))
+      (should (eq (magh-ui--repository-context explicit) explicit)))))
+
+(ert-deftest magh-ui-refresh-if-page-ignores-unrelated-buffers ()
+  (let (calls)
+    (cl-letf (((symbol-function 'magh-ui-refresh)
+               (lambda (&optional force) (push force calls))))
+      (with-temp-buffer
+        (special-mode)
+        (magh-ui--refresh-if-page))
+      (should-not calls)
+      (with-temp-buffer
+        (magh-section-mode)
+        (magh-ui--refresh-if-page))
+      (should (equal calls '(t))))))
 
 (ert-deftest magh-ui-visibility-survives-page-recreation-via-magit-cache ()
   (let ((magh-display-buffer-function #'identity)

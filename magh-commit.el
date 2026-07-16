@@ -31,10 +31,6 @@
 (defvar magh-commit--draft-sequence 0
   "Sequence used to give local review drafts stable identifiers.")
 
-(defun magh-commit--context (&optional context)
-  "Resolve repository CONTEXT for Commit commands."
-  (magh-context-resolve (or context magh-buffer-context) t))
-
 (defun magh-commit--resource (context data)
   "Create Commit resource from DATA."
   (let* ((sha (alist-get 'sha data))
@@ -42,7 +38,7 @@
          (message (alist-get 'message commit)))
     (magh-resource-create
      'commit context :sha sha
-     :title (and message (car (split-string message "\n")))
+     :title (car (string-lines message))
      :url (alist-get 'html_url data)
      :data data)))
 
@@ -103,7 +99,7 @@
 (defun magh-commit-list (&optional context ref path)
   "Open commit history in CONTEXT, optionally restricted to REF and PATH."
   (interactive (list (magh-context-read-repository)))
-  (setq context (magh-commit--context context)
+  (setq context (magh-ui--repository-context context)
         ref (or ref (magh-context-ref context)))
   (let ((params (list :ref ref :path path :limit magh-list-limit)))
     (magh-ui--open-page
@@ -759,8 +755,8 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
     (when commit
       (magh-ui--insert-header
        "Commit"
-       (car (split-string
-             (alist-get 'message (alist-get 'commit commit)) "\n"))
+       (car (string-lines
+             (alist-get 'message (alist-get 'commit commit))))
        'magh-resource-title))
     (when stale
       (insert (propertize
@@ -805,28 +801,24 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
 
 (defun magh-commit--review-selection ()
   "Return a GitHub review location for point or the active region."
-  (let ((resources (magh-commit--diff-selection-resources 'review-line)))
-    (let ((first (car resources))
-          (last (car (last resources))))
-      (unless (and first
-                   (seq-every-p
-                    (lambda (resource)
-                      (and (equal (plist-get resource :path)
-                                  (plist-get first :path))
-                           (equal (plist-get resource :side)
-                                  (plist-get first :side))
-                           (equal (plist-get resource :hunk)
-                                  (plist-get first :hunk))))
-                    resources))
-        (user-error "Review ranges must stay in one file, hunk, and diff side"))
-      (append
-       (list :path (plist-get first :path)
-             :line (plist-get last :line)
-             :side (plist-get last :side)
-             :subject-type "LINE")
-       (when (> (length resources) 1)
-         (list :start-line (plist-get first :line)
-               :start-side (plist-get first :side)))))))
+  (let* ((resources (magh-commit--diff-selection-resources 'review-line))
+         (first (car resources))
+         (last (car (last resources))))
+    (unless (seq-every-p
+             (lambda (resource)
+               (and (equal (plist-get resource :path) (plist-get first :path))
+                    (equal (plist-get resource :side) (plist-get first :side))
+                    (equal (plist-get resource :hunk) (plist-get first :hunk))))
+             resources)
+      (user-error "Review ranges must stay in one file, hunk, and diff side"))
+    (append
+     (list :path (plist-get first :path)
+           :line (plist-get last :line)
+           :side (plist-get last :side)
+           :subject-type "LINE")
+     (when (> (length resources) 1)
+       (list :start-line (plist-get first :line)
+             :start-side (plist-get first :side))))))
 
 (defun magh-commit--commit-selection ()
   "Return the commit diff location selected at point or by the region.
@@ -835,14 +827,11 @@ anchored to its final selected line."
   (let* ((resources (magh-commit--diff-selection-resources 'commit-line))
          (first (car resources))
          (last (car (last resources))))
-    (unless (and first
-                 (seq-every-p
-                  (lambda (resource)
-                    (and (equal (plist-get resource :path)
-                                (plist-get first :path))
-                         (equal (plist-get resource :hunk)
-                                (plist-get first :hunk))))
-                  resources))
+    (unless (seq-every-p
+             (lambda (resource)
+               (and (equal (plist-get resource :path) (plist-get first :path))
+                    (equal (plist-get resource :hunk) (plist-get first :hunk))))
+             resources)
       (user-error "Commit comment selections must stay in one file and hunk"))
     (list :path (plist-get first :path)
           :position (plist-get last :position)
@@ -1005,7 +994,7 @@ anchored to its final selected line."
 (defun magh-commit-review (number &optional context)
   "Review the latest head of Pull Request NUMBER using the Commit page."
   (interactive (list (read-number "Pull Request number: ")))
-  (setq context (magh-commit--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (format "*magh: %s · PR #%s Review*"
            (magh-context-repository context) number)
@@ -1028,7 +1017,7 @@ anchored to its final selected line."
 (defun magh-commit-browse-tree (&optional context sha)
   "Browse the repository tree at commit SHA in CONTEXT."
   (interactive)
-  (setq context (magh-commit--context context)
+  (setq context (magh-ui--repository-context context)
         sha (or sha magh-commit--sha))
   (unless sha (user-error "No commit at point or in this buffer"))
   (magh-resource-open
@@ -1039,7 +1028,7 @@ anchored to its final selected line."
 (defun magh-commit-view (sha &optional context preview)
   "Open Commit SHA in CONTEXT."
   (interactive (list (read-string "Commit SHA: ")))
-  (setq context (magh-commit--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (if preview
        (format "*magh preview: %s · %.10s*" (magh-context-repository context) sha)
@@ -1059,14 +1048,14 @@ anchored to its final selected line."
 (defun magh-commit-comment (body &optional context sha path position)
   "Add BODY on Commit SHA, optionally at PATH and diff POSITION."
   (interactive (list (read-string "Commit comment: ")))
-  (setq context (magh-commit--context context)
+  (setq context (magh-ui--repository-context context)
         sha (or sha magh-commit--sha))
   (when (string-empty-p (string-trim (or body "")))
     (user-error "Commit comment cannot be empty"))
   (magh-api--commit-comment
    context sha body path position
    (lambda (_) (message "Commit comment added")
-     (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+     (magh-ui--refresh-if-page))
    #'magh-core--user-error))
 
 (defun magh-commit-inline-comment (body &optional context sha)

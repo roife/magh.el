@@ -175,6 +175,23 @@ Call CALLBACK with data, optionally processed by TRANSFORM."
   "Return repeated FLAG arguments for VALUES."
   (seq-mapcat (lambda (value) (list flag value)) values))
 
+(defun magh-api--topic-edit-args (values)
+  "Return CLI arguments shared by Issue and Pull Request edits."
+  (append
+   (magh-api--flag "--milestone" (plist-get values :milestone))
+   (when (plist-get values :remove-milestone) '("--remove-milestone"))
+   (cl-loop for (key flag) in
+            '((:add-reviewers "--add-reviewer")
+              (:remove-reviewers "--remove-reviewer")
+              (:add-assignees "--add-assignee")
+              (:remove-assignees "--remove-assignee")
+              (:add-labels "--add-label")
+              (:remove-labels "--remove-label")
+              (:add-projects "--add-project")
+              (:remove-projects "--remove-project"))
+            append (magh-api--repeated-flags flag (plist-get values key)))
+   (when (plist-member values :body) '("--body-file" "-"))))
+
 (defun magh-api--flatten-pages (data)
   "Flatten `gh api --paginate --slurp' DATA."
   (apply #'append data))
@@ -531,22 +548,7 @@ HEADERS is a list of complete header strings."
      context
      (append (list "issue" "edit" (number-to-string number))
              (magh-api--flag "--title" (plist-get values :title))
-             (magh-api--flag "--milestone" (plist-get values :milestone))
-             (when (plist-get values :remove-milestone)
-               '("--remove-milestone"))
-             (magh-api--repeated-flags "--add-assignee"
-                                     (plist-get values :add-assignees))
-             (magh-api--repeated-flags "--remove-assignee"
-                                     (plist-get values :remove-assignees))
-             (magh-api--repeated-flags "--add-label"
-                                     (plist-get values :add-labels))
-             (magh-api--repeated-flags "--remove-label"
-                                     (plist-get values :remove-labels))
-             (magh-api--repeated-flags "--add-project"
-                                     (plist-get values :add-projects))
-             (magh-api--repeated-flags "--remove-project"
-                                     (plist-get values :remove-projects))
-             (when bodyp '("--body-file" "-"))
+             (magh-api--topic-edit-args values)
              (magh-api--repo-args context))
      (magh-api--domain context 'issue) callback errback
      :stdin (and bodyp (or (plist-get values :body) "")))))
@@ -878,26 +880,7 @@ degrades to readable and replyable threads without resolution capabilities."
      (append (list "pr" "edit" (number-to-string number))
              (magh-api--flag "--title" (plist-get values :title))
              (magh-api--flag "--base" (plist-get values :base))
-             (magh-api--flag "--milestone" (plist-get values :milestone))
-             (when (plist-get values :remove-milestone)
-               '("--remove-milestone"))
-             (magh-api--repeated-flags "--add-reviewer"
-                                     (plist-get values :add-reviewers))
-             (magh-api--repeated-flags "--remove-reviewer"
-                                     (plist-get values :remove-reviewers))
-             (magh-api--repeated-flags "--add-assignee"
-                                     (plist-get values :add-assignees))
-             (magh-api--repeated-flags "--remove-assignee"
-                                     (plist-get values :remove-assignees))
-             (magh-api--repeated-flags "--add-label"
-                                     (plist-get values :add-labels))
-             (magh-api--repeated-flags "--remove-label"
-                                     (plist-get values :remove-labels))
-             (magh-api--repeated-flags "--add-project"
-                                     (plist-get values :add-projects))
-             (magh-api--repeated-flags "--remove-project"
-                                     (plist-get values :remove-projects))
-             (when bodyp '("--body-file" "-"))
+             (magh-api--topic-edit-args values)
              (magh-api--repo-args context))
      (magh-api--domain context 'pr) callback errback
      :stdin (and bodyp (or (plist-get values :body) "")))))

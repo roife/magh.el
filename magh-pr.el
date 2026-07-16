@@ -28,10 +28,6 @@
 (defvar-local magh-pr--dispatch-resource nil)
 (defvar-local magh-pr--view-number nil)
 
-(defun magh-pr--context (&optional context)
-  "Resolve repository CONTEXT for a Pull Request command."
-  (magh-context-resolve (or context magh-buffer-context) t))
-
 (defun magh-pr--buffer-name (context &optional number suffix)
   "Return Pull Request buffer name for CONTEXT, NUMBER, and SUFFIX."
   (format "*magh: %s · %s%s*"
@@ -107,7 +103,7 @@
 (defun magh-pr-list (&optional context state params)
   "Open Pull Request list for CONTEXT, STATE, and PARAMS."
   (interactive (list (magh-context-read-repository)))
-  (setq context (magh-pr--context context)
+  (setq context (magh-ui--repository-context context)
         state (or state magh-default-pr-state))
   (let ((limit (or (plist-get params :limit) magh-list-limit)))
     (magh-ui--open-page
@@ -309,8 +305,8 @@ PROPERTIES may identify a file, review, or inline comment within the review."
         (let* ((commit-resource (magh-pr--commit-resource context commit))
                (sha (plist-get commit-resource :sha))
                (commit-data (alist-get 'commit commit))
-               (message (car (split-string
-                              (alist-get 'message commit-data) "\n")))
+               (message (car (string-lines
+                              (alist-get 'message commit-data))))
                (author (or (magh-core--name (alist-get 'author commit))
                            (magh-core--name (alist-get 'author commit-data)))))
           (magh-ui--section (commit sha commit-resource t)
@@ -373,7 +369,7 @@ PROPERTIES may identify a file, review, or inline comment within the review."
 (defun magh-pr-view (number &optional context preview)
   "Open Pull Request NUMBER in CONTEXT.  PREVIEW creates a disposable page."
   (interactive (list (read-number "Pull Request number: ")))
-  (setq context (magh-pr--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-ui--open-page
    (if preview
        (format "*magh preview: %s#%s*" (magh-context-repository context) number)
@@ -391,7 +387,7 @@ PROPERTIES may identify a file, review, or inline comment within the review."
   "Select a commit belonging to Pull Request NUMBER."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (magh-api--pr-commits
      context number
@@ -406,7 +402,7 @@ PROPERTIES may identify a file, review, or inline comment within the review."
                             (alist-get 'commit (plist-get item :data)))))
             (magh-ui--row
              (magh-ui--styled (substring (plist-get item :sha) 0 10) 'magh-hash)
-             (magh-ui--styled (car (split-string message "\n"))
+             (magh-ui--styled (car (string-lines message))
                             'magh-resource-title))))
         t))
      #'magh-core--user-error)))
@@ -468,7 +464,7 @@ PROPERTIES may identify a file, review, or inline comment within the review."
   "Open changed files page for Pull Request NUMBER."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (magh-ui--open-page
      (magh-pr--buffer-name context number "Changed Files")
@@ -494,7 +490,7 @@ PROPERTIES may identify a file, review, or inline comment within the review."
   "Open complete diff for Pull Request NUMBER asynchronously."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (let ((buffer (get-buffer-create (magh-pr--buffer-name context number "Diff"))))
       (with-current-buffer buffer
@@ -522,7 +518,7 @@ PROPERTIES may identify a file, review, or inline comment within the review."
 (defun magh-pr-template-read (context callback)
   "Asynchronously read a Pull Request template in CONTEXT.
 CALLBACK receives template text, or an empty string when no template exists."
-  (setq context (magh-pr--context context))
+  (setq context (magh-ui--repository-context context))
   (let ((paths '("pull_request_template.md"
                  ".github/pull_request_template.md"
                  "docs/pull_request_template.md")))
@@ -593,7 +589,7 @@ CALLBACK receives template text, or an empty string when no template exists."
 (defun magh-pr-create (&optional context)
   "Create a Pull Request in CONTEXT with a structured editor."
   (interactive (list (magh-context-read-repository)))
-  (setq context (magh-pr--context context))
+  (setq context (magh-ui--repository-context context))
   (magh-pr-template-read
    context
    (lambda (template)
@@ -656,7 +652,7 @@ CALLBACK receives template text, or an empty string when no template exists."
   "Edit Pull Request NUMBER in CONTEXT."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number (read-number "Pull Request number: ")))
     (let ((pr (alist-get 'pr magh-ui--data)))
       (if (equal (alist-get 'number pr) number)
@@ -705,19 +701,19 @@ CALLBACK receives template text, or an empty string when no template exists."
   "Add conversation BODY to Pull Request NUMBER."
   (interactive (list (read-string "Comment: ")))
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (magh-api--pr-comment
      context number body
      (lambda (_) (message "Comment added")
-       (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+       (magh-ui--refresh-if-page))
      #'magh-core--user-error)))
 
 (defun magh-pr-close (&optional context number)
   "Close Pull Request NUMBER."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (when (magh-core--confirm (format "Close Pull Request #%s? " number))
       (let ((comment (read-string "Closing comment (optional): "))
@@ -725,27 +721,27 @@ CALLBACK receives template text, or an empty string when no template exists."
         (magh-api--pr-close
          context number (unless (string-empty-p comment) comment) delete-branch
          (lambda (_) (message "Pull Request #%s closed" number)
-           (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+           (magh-ui--refresh-if-page))
          #'magh-core--user-error)))))
 
 (defun magh-pr-reopen (&optional context number)
   "Reopen Pull Request NUMBER."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (let ((comment (read-string "Reopen comment (optional): ")))
       (magh-api--pr-reopen
        context number (unless (string-empty-p comment) comment)
        (lambda (_) (message "Pull Request #%s reopened" number)
-         (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+         (magh-ui--refresh-if-page))
        #'magh-core--user-error))))
 
 (defun magh-pr-checkout (&optional context number)
   "Checkout Pull Request NUMBER in the local worktree."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (unless (magh-context-root context)
       (user-error "Checkout requires a local repository worktree"))
@@ -757,7 +753,7 @@ CALLBACK receives template text, or an empty string when no template exists."
   "Open the Commit Review page for the latest head of Pull Request NUMBER."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (magh-resource-open
      (magh-resource-create 'commit-review context :number number))))
@@ -766,7 +762,7 @@ CALLBACK receives template text, or an empty string when no template exists."
   "Merge Pull Request NUMBER after prompting for strategy."
   (interactive)
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (let ((method (intern (completing-read "Merge method: "
                                            '("merge" "squash" "rebase") nil t)))
@@ -775,40 +771,40 @@ CALLBACK receives template text, or an empty string when no template exists."
         (magh-api--pr-merge
          context number method (list :delete-branch delete-branch)
          (lambda (_) (message "Pull Request #%s merged" number)
-           (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+           (magh-ui--refresh-if-page))
          #'magh-core--user-error)))))
 
 (defun magh-pr-lock (&optional unlock context number)
   "Lock Pull Request NUMBER, or UNLOCK with prefix argument."
   (interactive "P")
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (magh-api--pr-lock
      context number (not unlock) nil
      (lambda (_) (message "Pull Request #%s %s" number
                           (if unlock "unlocked" "locked"))
-       (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+       (magh-ui--refresh-if-page))
      #'magh-core--user-error)))
 
 (defun magh-pr-ready (&optional draft context number)
   "Mark Pull Request NUMBER ready, or DRAFT with prefix argument."
   (interactive "P")
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (magh-api--pr-ready
      context number (not draft)
      (lambda (_) (message "Pull Request #%s marked %s" number
                           (if draft "draft" "ready"))
-       (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+       (magh-ui--refresh-if-page))
      #'magh-core--user-error)))
 
 (defun magh-pr-auto-merge (&optional disable context number)
   "Enable auto-merge for Pull Request NUMBER, or DISABLE with prefix."
   (interactive "P")
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (let ((method (and (not disable)
                        (intern (completing-read
@@ -817,7 +813,7 @@ CALLBACK receives template text, or an empty string when no template exists."
       (magh-api--pr-auto-merge
        context number (not disable) method
        (lambda (_) (message "Auto-merge %s" (if disable "disabled" "enabled"))
-         (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+         (magh-ui--refresh-if-page))
        #'magh-core--user-error))))
 
 ;;;###autoload
@@ -825,7 +821,7 @@ CALLBACK receives template text, or an empty string when no template exists."
   "Add `Closes #ISSUE' to Pull Request NUMBER body."
   (interactive (list (read-number "Issue number to close: ")))
   (pcase-let ((`(,current-context ,current-number) (magh-pr--current)))
-    (setq context (magh-pr--context (or context current-context))
+    (setq context (magh-ui--repository-context (or context current-context))
           number (or number current-number))
     (magh-api--pr-get
      context number
@@ -838,7 +834,7 @@ CALLBACK receives template text, or an empty string when no template exists."
             context number (list :body (concat (string-trim-right body)
                                                "\n\n" marker "\n"))
             (lambda (_) (message "Linked Issue #%s" issue)
-              (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
+              (magh-ui--refresh-if-page))
             #'magh-core--user-error))))
      #'magh-core--user-error)))
 

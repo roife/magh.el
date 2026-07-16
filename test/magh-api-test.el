@@ -4,6 +4,20 @@
 (require 'magh-api)
 (require 'magh-command)
 
+(ert-deftest magh-command-interactive-input-uses-shell-argument-syntax ()
+  (let ((magh-display-buffer-function #'identity)
+        captured)
+    (cl-letf (((symbol-function 'read-shell-command)
+               (lambda (&rest _) "issue create --title 'two words' --body '$HOME'"))
+              ((symbol-function 'magh-context-resolve)
+               (lambda (&rest _) (magh-context-create)))
+              ((symbol-function 'magh-client--start-pty)
+               (lambda (argv _name _context) (setq captured argv) 'buffer)))
+      (call-interactively #'magh-command))
+    (should (equal captured
+                   '("issue" "create" "--title" "two words"
+                     "--body" "$HOME")))))
+
 (ert-deftest magh-api-issue-list-keeps-each-cli-argument-separate ()
   (let ((context (magh-context-from-repository "acme/widgets" "github.com"))
         captured)
@@ -33,6 +47,17 @@
     (dolist (argv calls)
       (should (member "--remove-milestone" argv))
       (should-not (member "--milestone" argv)))))
+
+(ert-deftest magh-api-topic-edit-arguments-are-shared ()
+  (should
+   (equal
+    (magh-api--topic-edit-args
+     '(:milestone "v1" :add-reviewers ("alice")
+       :remove-assignees ("bob") :add-labels ("bug")
+       :remove-projects ("Old") :body "Body"))
+    '("--milestone" "v1" "--add-reviewer" "alice"
+      "--remove-assignee" "bob" "--add-label" "bug"
+      "--remove-project" "Old" "--body-file" "-"))))
 
 (ert-deftest magh-api-rest-pagination-and-fields-are-typed ()
   (should

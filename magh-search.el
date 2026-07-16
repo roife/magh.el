@@ -110,7 +110,7 @@
        (magh-ui--row
         (magh-search--styled (substring sha 0 (min 10 (length sha))) 'magh-hash)
         (magh-search--styled
-         (car (split-string (plist-get resource :title) "\n"))
+         (car (string-lines (plist-get resource :title)))
          'magh-resource-title))))
     ('run
      (let* ((data (plist-get resource :data))
@@ -331,7 +331,7 @@ OPTIONS contains API filters."
 CONTEXT defaults to the current repository and INITIAL seeds the search.
 Issue, Pull Request, code, and commit searches use GitHub search.  Action,
 Release, and branch searches fetch repository data and narrow it locally."
-  (setq context (magh-context-resolve (or context magh-buffer-context) t))
+  (setq context (magh-ui--repository-context context))
   (pcase-exhaustive kind
     ((or 'issues 'prs 'code 'commits)
      (magh-consult-search kind context initial
@@ -378,7 +378,7 @@ Release, and branch searches fetch repository data and narrow it locally."
 (defun magh-repository-search-dispatch (&optional context)
   "Search within repository CONTEXT."
   (interactive)
-  (setq context (magh-context-resolve (or context magh-buffer-context) t))
+  (setq context (magh-ui--repository-context context))
   (let* ((kind (intern
                 (completing-read
                  "Repository search type: "
