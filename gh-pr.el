@@ -173,24 +173,10 @@
    :url (alist-get 'html_url commit)
    :data commit))
 
-(defun gh-pr--file-resource (context file head-ref)
-  "Create remote file resource for FILE at HEAD-REF."
-  (let ((path (alist-get 'filename file)))
-    (gh-resource-create
-     'file (gh-context-copy context :ref head-ref :path path)
-     :path path :ref head-ref
-     :url (alist-get 'blob_url file))))
-
-(defun gh-pr--head-context (context pr)
-  "Return the head repository context for PR, falling back to CONTEXT."
-  (if-let* ((repository
-             (alist-get 'nameWithOwner (alist-get 'headRepository pr))))
-      (gh-context-from-repository repository (gh-context-host context))
-    context))
-
-(defun gh-pr--head-ref (pr)
-  "Return PR's immutable head ref when available."
-  (or (alist-get 'headRefOid pr) (alist-get 'headRefName pr)))
+(defun gh-pr--review-resource (context number &rest properties)
+  "Create a Commit Review resource for Pull Request NUMBER.
+PROPERTIES may identify a file, review, or inline comment within the review."
+  (apply #'gh-resource-create 'commit-review context :number number properties))
 
 (defun gh-pr--check-resource (context check)
   "Create Run or web CHECK resource."
@@ -221,8 +207,8 @@
                   (alist-get 'submittedAt (cdr b))
                   (alist-get 'created_at (cdr b)) "")))))
 
-(defun gh-pr--render-conversation (context items head-context head-ref)
-  "Render Pull Request conversation ITEMS using HEAD-CONTEXT and HEAD-REF."
+(defun gh-pr--render-conversation (context number items)
+  "Render Pull Request NUMBER conversation ITEMS in CONTEXT."
   (gh-ui--section (conversation 'conversation nil nil)
     (format "Conversation (%d)" (length items))
     (dolist (item items)
@@ -240,12 +226,16 @@
                    (line (or (alist-get 'line data)
                              (alist-get 'original_line data)))
                    (resource
-                    (if path
-                        (gh-resource-create
-                         'file (gh-context-copy head-context
-                                                :ref head-ref :path path)
-                         :path path :ref head-ref :line line)
-                      (gh-resource-create 'comment context :id id)))
+                    (pcase kind
+                      ('review
+                       (gh-pr--review-resource
+                        context number :review-id id))
+                      ('inline
+                       (gh-pr--review-resource
+                        context number :comment-id id :path path :line line
+                        :side (or (alist-get 'side data)
+                                  (alist-get 'original_side data))))
+                      (_ (gh-resource-create 'comment context :id id))))
                    (heading
                     (concat
                      (gh-ui--styled
@@ -281,8 +271,6 @@
          (resource (gh-pr--resource context pr))
          (number (alist-get 'number pr))
          (head-name (alist-get 'headRefName pr))
-         (head-context (gh-pr--head-context context pr))
-         (head-ref (gh-pr--head-ref pr))
          (base-ref (alist-get 'baseRefName pr))
          (state (if (alist-get 'isDraft pr)
                     "DRAFT" (alist-get 'state pr))))
@@ -335,11 +323,12 @@
                            (alist-get 'date (alist-get 'committer commit-data)))
              'gh-date)))))
     (gh-ui--section (files 'files
-                           (gh-resource-create 'pr-files context :number number) nil)
+                           (gh-pr--review-resource context number) nil)
       (format "Files (%d)" (length files))
       (dolist (file files)
         (let ((file-resource
-               (gh-pr--file-resource head-context file head-ref)))
+               (gh-pr--review-resource
+                context number :path (alist-get 'filename file))))
           (gh-ui--section (file (alist-get 'filename file)
                                 file-resource t)
             (gh-ui--row
@@ -362,8 +351,7 @@
              (gh-ui--styled (upcase status) (gh-core--state-face status))
              (gh-ui--styled name 'gh-workflow))))))
     (gh-pr--render-conversation
-     context (gh-pr--conversation-items pr inline-comments)
-     head-context head-ref)))
+     context number (gh-pr--conversation-items pr inline-comments))))
 
 (defun gh-pr--setup-view (context number)
   "Install detail keys for Pull Request NUMBER in CONTEXT."
@@ -425,18 +413,15 @@
 
 (defun gh-pr--render-files (context number result)
   "Render changed files RESULT for Pull Request NUMBER."
-  (let* ((pr (alist-get 'pr result))
-         (files (alist-get 'files result))
-         (comments (alist-get 'review-comments result))
-         (head-context (gh-pr--head-context context pr))
-         (head-ref (gh-pr--head-ref pr)))
+  (let* ((files (alist-get 'files result))
+         (comments (alist-get 'review-comments result)))
     (gh-ui--insert-header "Repository" (gh-context-repository context)
                           'gh-repository)
     (gh-ui--insert-header "Pull Request" (format "#%s changed files" number))
     (insert "\n")
     (dolist (file files)
       (let* ((path (alist-get 'filename file))
-             (resource (gh-pr--file-resource head-context file head-ref))
+             (resource (gh-pr--review-resource context number :path path))
              (file-comments
               (seq-filter (lambda (comment)
                             (equal (alist-get 'path comment) path))
@@ -456,9 +441,17 @@
                                 'font-lock-face 'shadow)))
           (dolist (comment file-comments)
             (let ((line (or (alist-get 'line comment)
-                            (alist-get 'original_line comment))))
+                            (alist-get 'original_line comment)))
+                  (comment-resource
+                   (gh-pr--review-resource
+                    context number :comment-id (alist-get 'id comment)
+                    :path path
+                    :line (or (alist-get 'line comment)
+                              (alist-get 'original_line comment))
+                    :side (or (alist-get 'side comment)
+                              (alist-get 'original_side comment)))))
               (gh-ui--section (inline-comment
-                               (alist-get 'id comment) resource nil)
+                               (alist-get 'id comment) comment-resource nil)
                 (gh-ui--row
                  (concat
                   (gh-ui--styled "Inline comment" 'gh-conversation-kind)
@@ -483,8 +476,6 @@
      (lambda (success error force)
        (gh-core--collect-async
         (list
-         (cons 'pr (lambda (ok fail)
-                     (gh-api--pr-get context number ok fail force)))
          (cons 'files (lambda (ok fail)
                         (gh-api--pr-files context number ok fail force)))
          (cons 'review-comments

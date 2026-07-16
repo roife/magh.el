@@ -488,7 +488,7 @@
           (gh-test-render-page
            'conversation 1
            (lambda (_)
-             (gh-pr--render-conversation context items context "main"))
+             (gh-pr--render-conversation context 1 items))
            nil)))
     (dolist (label '("Comment" "Review" "Inline comment"))
       (let ((position (string-match (regexp-quote label) text)))
@@ -582,12 +582,11 @@
            'pr 1
            (lambda (_)
              (gh-pr--render-conversation
-              context
+              context 1
               '((inline . ((id . 2) (path . "a.el") (line . 7)
                            (user . ((login . "bob")))
                            (created_at . "2026-07-01")
-                           (body . "PR inline body"))))
-              context "HEAD"))
+                           (body . "PR inline body"))))))
            nil)))
     (cl-labels ((has-inline-face-p
                  (needle text)
@@ -606,10 +605,9 @@
       (should-not (has-inline-face-p "Comment" commit-general))
       (should-not (has-inline-face-p "Commit inline body" commit-general)))))
 
-(ert-deftest gh-pr-conversation-uses-fork-location ()
+(ert-deftest gh-pr-conversation-review-items-open-the-pr-review ()
   (let* ((gh-date-format-function #'identity)
          (context (gh-context-from-repository "base/repo"))
-         (head-context (gh-context-from-repository "fork/repo"))
          (head-oid "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
          (items
           `((review . ((id . "r1") (author . ((login . "alice")))
@@ -623,16 +621,49 @@
            'conversation 1
            (lambda (_)
              (gh-pr--render-conversation
-              context items head-context head-oid))
+              context 7 items))
            nil)))
     (should-not (string-match-p "Author: alice\n" text))
     (should-not (string-match-p "Commit: " text))
+    (dolist (spec '(("Review by alice" :review-id "r1")
+                    ("Inline comment by bob" :comment-id 2)))
+      (let* ((position (string-match (car spec) text))
+             (resource (and position
+                            (get-text-property position 'gh-resource text))))
+        (should resource)
+        (should (eq (plist-get resource :kind) 'commit-review))
+        (should (= (plist-get resource :number) 7))
+        (should (equal (plist-get resource (nth 1 spec)) (nth 2 spec)))))
     (let* ((position (string-match "src/a.el:7" text))
            (resource (and position
                           (get-text-property position 'gh-resource text))))
-      (should resource)
-      (should (equal (plist-get resource :repository) "fork/repo"))
-      (should (equal (plist-get resource :ref) head-oid)))))
+      (should (equal (plist-get resource :path) "src/a.el"))
+      (should (= (plist-get resource :line) 7)))))
+
+(ert-deftest gh-pr-files-open-the-pr-review ()
+  (let* ((context (gh-context-from-repository "o/r"))
+         (result
+          '((pr . ((number . 7) (title . "Review me") (state . "OPEN")
+                   (headRefName . "topic") (baseRefName . "main")
+                   (comments . nil) (reviews . nil)))
+            (commits . nil)
+            (files . (((filename . "src/a.el")
+                       (additions . 2) (deletions . 1))))
+            (review-comments . nil)))
+         (text
+          (gh-test-render-page
+           'pr 7
+           (lambda (data) (gh-pr--render-view context data))
+           result)))
+    (dolist (spec '(("Files (1)" nil)
+                    ("src/a.el" "src/a.el")))
+      (let* ((position (string-match (car spec) text))
+             (resource (and position
+                            (get-text-property position 'gh-resource text))))
+        (should resource)
+        (should (eq (plist-get resource :kind) 'commit-review))
+        (should (= (plist-get resource :number) 7))
+        (should (equal (plist-get resource :path) (cadr spec)))))))
 
 (ert-deftest gh-ui-prose-sections-enable-visual-line-mode ()
   (with-temp-buffer
