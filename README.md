@@ -5,6 +5,12 @@
 requests, reviews, Actions, releases, notifications, and source trees as native
 Emacs buffers built with `magit-section`.
 
+> [!WARNING]
+> **Work in progress:** `magh.el` is under active development. Public commands,
+> keybindings, customization options, and buffer layouts may change before the
+> first stable release. Please report bugs with reproduction steps and the
+> output of `M-x emacs-version` and `gh --version`.
+
 Authentication, network access, GitHub Enterprise hosts, and API transport are
 delegated to `gh`, so `magh.el` uses the accounts and credentials you already have
 configured. When a workflow does not yet have a dedicated Emacs interface, you
