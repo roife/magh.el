@@ -564,37 +564,29 @@ CALLBACK receives template text, or an empty string when no template exists."
               (lambda (_error) (funcall callback ""))))))
       (try paths))))
 
-(defun magh-pr--completion-fetchers (context)
-  "Return async completion providers for CONTEXT."
-  (let ((names
-         (lambda (api key)
-           (lambda (success error)
-             (funcall api context
-                      (lambda (items)
-                        (funcall success
-                                 (mapcar (lambda (item) (alist-get key item))
-                                         items)))
-                      error)))))
-    (list :users (funcall names #'magh-api--repo-collaborators 'login)
-          :labels (funcall names #'magh-api--repo-labels 'name)
-          :milestones (funcall names #'magh-api--repo-milestones 'title)
-          :branches (funcall names #'magh-api--repo-branches 'name)
-          :projects (funcall names #'magh-api--project-list 'title))))
-
 (defun magh-pr--editor-fields (context &optional creating)
   "Return Pull Request editor fields for CONTEXT."
-  (let ((fetchers (magh-pr--completion-fetchers context)))
+  (let ((branches (magh-edit--completion-fetcher
+                   #'magh-api--repo-branches context 'name))
+        (users (magh-edit--completion-fetcher
+                #'magh-api--repo-collaborators context 'login))
+        (labels (magh-edit--completion-fetcher
+                 #'magh-api--repo-labels context 'name))
+        (milestones (magh-edit--completion-fetcher
+                     #'magh-api--repo-milestones context 'title))
+        (projects (magh-edit--completion-fetcher
+                   #'magh-api--project-list context 'title)))
     (append
      `((:name title :required t)
-       (:name base :required t :completion-fetch ,(plist-get fetchers :branches)))
+       (:name base :required t :completion-fetch ,branches))
      (when creating
-       `((:name head :required t :completion-fetch ,(plist-get fetchers :branches))))
-     `((:name reviewers :multiple t :completion-fetch ,(plist-get fetchers :users))
-       (:name assignees :multiple t :completion-fetch ,(plist-get fetchers :users))
-       (:name labels :multiple t :completion-fetch ,(plist-get fetchers :labels))
-       (:name milestone :completion-fetch ,(plist-get fetchers :milestones))
+       `((:name head :required t :completion-fetch ,branches)))
+     `((:name reviewers :multiple t :completion-fetch ,users)
+       (:name assignees :multiple t :completion-fetch ,users)
+       (:name labels :multiple t :completion-fetch ,labels)
+       (:name milestone :completion-fetch ,milestones)
        (:name projects :multiple t
-        :completion-fetch ,(plist-get fetchers :projects)))
+        :completion-fetch ,projects))
      (when creating '((:name draft :type boolean))))))
 
 ;;;###autoload

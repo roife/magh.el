@@ -298,7 +298,6 @@
                                        magh-temporary-clone-directory)
                      t))
          (ref (magh-context-ref context)))
-    (delete-directory directory)
     (magh-api--repo-clone
      context directory
      (lambda (_)

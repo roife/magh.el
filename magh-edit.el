@@ -169,6 +169,15 @@
           (setq start (point)))
         (list start end values :exclusive 'no)))))
 
+(defun magh-edit--completion-fetcher (function context field)
+  "Return a completion fetcher using FUNCTION in CONTEXT for FIELD."
+  (lambda (success error)
+    (funcall function context
+             (lambda (items)
+               (funcall success
+                        (mapcar (lambda (item) (alist-get field item)) items)))
+             error)))
+
 (defun magh-edit--prime-completions ()
   "Start asynchronous completion fetches declared by field definitions."
   (let ((buffer (current-buffer)))

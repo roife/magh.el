@@ -238,33 +238,24 @@
 
 ;;; Templates and editing
 
-(defun magh-issue--completion-fetchers (context)
-  "Return asynchronous field completion fetchers for CONTEXT."
-  (let ((names
-         (lambda (api key)
-           (lambda (success error)
-             (funcall api context
-                      (lambda (items)
-                        (funcall success
-                                 (mapcar (lambda (item) (alist-get key item))
-                                         items)))
-                      error)))))
-    (list :assignees (funcall names #'magh-api--repo-collaborators 'login)
-          :labels (funcall names #'magh-api--repo-labels 'name)
-          :milestones (funcall names #'magh-api--repo-milestones 'title)
-          :projects (funcall names #'magh-api--project-list 'title))))
-
 (defun magh-issue--editor-fields (context)
   "Return Issue editor fields for CONTEXT."
-  (let ((fetchers (magh-issue--completion-fetchers context)))
+  (let ((assignees (magh-edit--completion-fetcher
+                    #'magh-api--repo-collaborators context 'login))
+        (labels (magh-edit--completion-fetcher
+                 #'magh-api--repo-labels context 'name))
+        (milestones (magh-edit--completion-fetcher
+                     #'magh-api--repo-milestones context 'title))
+        (projects (magh-edit--completion-fetcher
+                   #'magh-api--project-list context 'title)))
     `((:name title :required t)
       (:name assignees :multiple t
-       :completion-fetch ,(plist-get fetchers :assignees))
+       :completion-fetch ,assignees)
       (:name labels :multiple t
-       :completion-fetch ,(plist-get fetchers :labels))
-      (:name milestone :completion-fetch ,(plist-get fetchers :milestones))
+       :completion-fetch ,labels)
+      (:name milestone :completion-fetch ,milestones)
       (:name projects :multiple t
-       :completion-fetch ,(plist-get fetchers :projects)))))
+       :completion-fetch ,projects))))
 
 (defun magh-issue--template-values (text)
   "Parse Markdown issue template TEXT into (VALUES BODY)."

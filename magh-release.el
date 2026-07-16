@@ -192,13 +192,8 @@
                  (unless creating '(:allow-empty t))))
    `((:name target
       :completion-fetch
-      ,(lambda (success error)
-         (magh-api--repo-branches
-          context
-          (lambda (items)
-            (funcall success (mapcar (lambda (item) (alist-get 'name item))
-                                     items)))
-          error)))
+      ,(magh-edit--completion-fetcher
+        #'magh-api--repo-branches context 'name))
      (:name draft :type boolean)
      (:name prerelease :type boolean))
    (when creating '((:name generate-notes :type boolean)))))
@@ -252,8 +247,8 @@
   (list :tag (alist-get 'tagName data)
         :title (alist-get 'name data)
         :target (alist-get 'targetCommitish data)
-        :draft (if (alist-get 'isDraft data) t :json-false)
-        :prerelease (if (alist-get 'isPrerelease data) t :json-false)))
+        :draft (or (alist-get 'isDraft data) :json-false)
+        :prerelease (or (alist-get 'isPrerelease data) :json-false)))
 
 (defun magh-release--open-edit-editor (context tag data)
   "Open structured editor for Release TAG using DATA."
@@ -323,7 +318,7 @@
      (lambda (data)
        (let ((enable (not (alist-get 'isPrerelease data))))
          (magh-api--release-edit
-          context tag (list :prerelease (if enable t :json-false))
+          context tag (list :prerelease (or enable :json-false))
           (lambda (_) (message "Prerelease %s" (if enable "enabled" "disabled"))
             (when (derived-mode-p 'magh-section-mode) (magh-ui-refresh t)))
           #'magh-core--user-error)))

@@ -22,19 +22,12 @@
 
 (defvar-local magh-command--generation 0)
 
-(defun magh-command--read-argv ()
-  "Read a GitHub CLI command line and safely return argv."
-  (let ((line (read-shell-command "gh ")))
-    (condition-case error
-        (split-string-and-unquote line)
-      (error (user-error "Cannot parse command: %s"
-                         (error-message-string error))))))
-
 ;;;###autoload
 (defun magh-command (argv &optional context)
   "Run arbitrary GitHub CLI ARGV in an interactive Emacs PTY.
 ARGV is a list of strings.  No shell evaluates the command."
-  (interactive (list (magh-command--read-argv)))
+  (interactive
+   (list (split-string-shell-command (read-shell-command "gh "))))
   (setq context (magh-context-resolve context))
   (let* ((label (if argv (string-join (take 2 argv) " ") "gh"))
          (buffer (magh-client--start-pty argv (format "*magh command: %s*" label)

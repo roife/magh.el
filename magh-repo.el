@@ -487,16 +487,16 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
    :visibility (downcase (alist-get 'visibility repo))
    :homepage (or (alist-get 'homepageUrl repo) "")
    :topics (mapcar #'magh-core--name (alist-get 'repositoryTopics repo))
-   :template (if (alist-get 'isTemplate repo) t :json-false)
-   :issues (if (alist-get 'hasIssuesEnabled repo) t :json-false)
-   :projects (if (alist-get 'hasProjectsEnabled repo) t :json-false)
-   :discussions (if (alist-get 'hasDiscussionsEnabled repo) t :json-false)
-   :wiki (if (alist-get 'hasWikiEnabled repo) t :json-false)
-   :merge-commit (if (alist-get 'mergeCommitAllowed repo) t :json-false)
-   :squash-merge (if (alist-get 'squashMergeAllowed repo) t :json-false)
-   :rebase-merge (if (alist-get 'rebaseMergeAllowed repo) t :json-false)
+   :template (or (alist-get 'isTemplate repo) :json-false)
+   :issues (or (alist-get 'hasIssuesEnabled repo) :json-false)
+   :projects (or (alist-get 'hasProjectsEnabled repo) :json-false)
+   :discussions (or (alist-get 'hasDiscussionsEnabled repo) :json-false)
+   :wiki (or (alist-get 'hasWikiEnabled repo) :json-false)
+   :merge-commit (or (alist-get 'mergeCommitAllowed repo) :json-false)
+   :squash-merge (or (alist-get 'squashMergeAllowed repo) :json-false)
+   :rebase-merge (or (alist-get 'rebaseMergeAllowed repo) :json-false)
    :delete-branch-on-merge
-   (if (alist-get 'deleteBranchOnMerge repo) t :json-false)))
+   (or (alist-get 'deleteBranchOnMerge repo) :json-false)))
 
 ;;;###autoload
 (defun magh-repository-settings-edit (&optional context)
@@ -511,14 +511,8 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
             (boolean-fields
              '(template issues projects discussions wiki merge-commit
                squash-merge rebase-merge delete-branch-on-merge))
-            (branch-fetch
-             (lambda (ok fail)
-               (magh-api--repo-branches
-                context
-                (lambda (items)
-                  (funcall ok (mapcar (lambda (item)
-                                       (alist-get 'name item)) items)))
-                fail))))
+            (branch-fetch (magh-edit--completion-fetcher
+                           #'magh-api--repo-branches context 'name)))
        (magh-edit-open
         (magh-repo--buffer-name context "Settings")
         (append
@@ -543,7 +537,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
                         :remove-topics (seq-difference old-topics new-topics #'string=))))
             (dolist (field boolean-fields)
               (let ((key (intern (format ":%s" field))))
-                (setf (plist-get settings key) (eq (plist-get values key) t))))
+                (setf (plist-get settings key) (plist-get values key))))
             (magh-api--repo-edit context settings success error))))))
    #'magh-core--user-error))
 
@@ -560,8 +554,6 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
                                            (file-name-nondirectory repo))))
      (list repo directory)))
   (let ((context (magh-repo--context repository)))
-    (when (file-exists-p directory)
-      (user-error "Destination already exists: %s" directory))
     (message "Cloning %s…" (magh-context-repository context))
     (magh-api--repo-clone
      context directory

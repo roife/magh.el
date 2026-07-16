@@ -363,10 +363,7 @@ non-nil, runs in the page buffer after mode initialization."
   "Open the contextual action menu for this page."
   (interactive)
   (let* ((resource (magh-ui-resource-at-point))
-         (action (and resource
-                      (plist-get (gethash (plist-get resource :kind)
-                                          magh-candidate--actions)
-                                 :dispatch))))
+         (action (magh-candidate--action resource :dispatch)))
     (cond
      (action (funcall action resource))
      (magh-buffer-dispatch-function (funcall magh-buffer-dispatch-function))
