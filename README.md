@@ -51,7 +51,7 @@ Or clone the repository and add it to your `load-path`:
 
 ```elisp
 (add-to-list 'load-path "/path/to/magh.el")
-(require 'gh)
+(require 'magh)
 ```
 
 Before opening `magh.el`, make sure the CLI can access your account:
@@ -62,34 +62,34 @@ gh auth status
 
 ## Getting started
 
-Run `M-x gh` to open your GitHub user status page. From there you can visit
+Run `M-x magh` to open your GitHub user status page. From there you can visit
 review requests, assigned work, notifications, and repositories.
 
-Run `C-u M-x gh` or `M-x gh-dispatch` to open the top-level Transient menu. A
+Run `C-u M-x magh` or `M-x magh-dispatch` to open the top-level Transient menu. A
 convenient global binding is:
 
 ```elisp
-(global-set-key (kbd "C-c g") #'gh)
+(global-set-key (kbd "C-c g") #'magh)
 ```
 
 Useful direct entry points include:
 
 | Command | Description |
 | --- | --- |
-| `gh-user-status` | Show account activity and assigned work |
-| `gh-repo-status` | Open the current repository workspace |
-| `gh-repo-status-other` | Select and open any repository |
-| `gh-issue-list` | Browse issues |
-| `gh-pr-list` | Browse pull requests |
-| `gh-review-requests` | Show pull requests awaiting your review |
-| `gh-run-list` | Browse Actions runs, jobs, steps, and logs |
-| `gh-workflow-list` | Browse and dispatch workflows |
-| `gh-release-list` | Browse releases with preview |
-| `gh-search-dispatch` | Search GitHub with Consult |
-| `gh-notifications-dispatch` | Browse and manage notifications |
-| `gh-browse-repository` | Browse a remote tree without cloning |
-| `gh-command` | Run any `gh` command in an Emacs PTY |
-| `gh-api-request` | Call an arbitrary REST or GraphQL endpoint |
+| `magh-user-status` | Show account activity and assigned work |
+| `magh-repo-status` | Open the current repository workspace |
+| `magh-repo-status-other` | Select and open any repository |
+| `magh-issue-list` | Browse issues |
+| `magh-pr-list` | Browse pull requests |
+| `magh-review-requests` | Show pull requests awaiting your review |
+| `magh-run-list` | Browse Actions runs, jobs, steps, and logs |
+| `magh-workflow-list` | Browse and dispatch workflows |
+| `magh-release-list` | Browse releases with preview |
+| `magh-search-dispatch` | Search GitHub with Consult |
+| `magh-notifications-dispatch` | Browse and manage notifications |
+| `magh-browse-repository` | Browse a remote tree without cloning |
+| `magh-command` | Run any `gh` command in an Emacs PTY |
+| `magh-api-request` | Call an arbitrary REST or GraphQL endpoint |
 
 Inside native resource pages, the usual Magit navigation applies: `TAB`
 expands or collapses a section, `RET` visits the resource at point, `n` and `p`
@@ -101,49 +101,49 @@ to cancel.
 
 ## Configuration
 
-All options are available through `M-x customize-group RET gh`. For example:
+All options are available through `M-x customize-group RET magh`. For example:
 
 ```elisp
 ;; Use a GitHub Enterprise host. Nil lets gh choose its authenticated default.
-(setq gh-host "github.example.com")
+(setq magh-host "github.example.com")
 
 ;; Control list sizes and default filters.
-(setq gh-list-limit 50
-      gh-default-issue-state "open"
-      gh-default-pr-state "open")
+(setq magh-list-limit 50
+      magh-default-issue-state "open"
+      magh-default-pr-state "open")
 
 ;; Disable asynchronous thumbnails for remote images in GitHub Markdown.
-(setq gh-view-inline-images nil)
+(setq magh-view-inline-images nil)
 
-;; Organizations shown by `gh-favorite-repositories`.
-(setq gh-favorite-organizations '("emacs-mirror" "github"))
+;; Organizations shown by `magh-favorite-repositories`.
+(setq magh-favorite-organizations '("emacs-mirror" "github"))
 ```
 
 By default, a host inferred from the current repository's Git remote takes
-precedence over `gh-host`. Credentials remain managed by the GitHub CLI; this
+precedence over `magh-host`. Credentials remain managed by the GitHub CLI; this
 package does not store access tokens.
 
 ## Optional integrations
 
 ### Magit
 
-`gh-magit-mode` adds asynchronous pull request, issue, and Actions summaries to
+`magh-magit-mode` adds asynchronous pull request, issue, and Actions summaries to
 Magit status buffers. The status hook displays cached data or a loading row and
 does not wait for network requests.
 
 ```elisp
-(require 'gh-magit)
-(setq gh-magit-status-sections '(pr issue run)
-      gh-magit-list-limit 10
-      gh-magit-cache-ttl 30)
-(gh-magit-mode 1)
+(require 'magh-magit)
+(setq magh-magit-status-sections '(pr issue run)
+      magh-magit-list-limit 10
+      magh-magit-cache-ttl 30)
+(magh-magit-mode 1)
 ```
 
 ### Embark
 
 ```elisp
-(require 'gh-embark)
-(gh-embark-mode 1)
+(require 'magh-embark)
+(magh-embark-mode 1)
 ```
 
 This adds resource-aware actions for repositories, files, issues, pull
@@ -152,8 +152,8 @@ requests, releases, workflows, runs, branches, commits, and notifications.
 ### Forge
 
 ```elisp
-(require 'gh-forge)
-(gh-forge-mode 1)
+(require 'magh-forge)
+(magh-forge-mode 1)
 ```
 
 The Forge bridge lets issue and pull request candidates open as Forge topics.

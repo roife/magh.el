@@ -1,76 +1,76 @@
-;;; gh-ui-test.el --- Native page and Magit integration tests -*- lexical-binding: t; -*-
+;;; magh-ui-test.el --- Native page and Magit integration tests -*- lexical-binding: t; -*-
 
-(require 'gh-test-helper)
-(require 'gh)
-(require 'gh-magit)
+(require 'magh-test-helper)
+(require 'magh)
+(require 'magh-magit)
 
-(defun gh-test-font-lock-face-p (text position face)
+(defun magh-test-font-lock-face-p (text position face)
   "Return non-nil when TEXT at POSITION carries FACE."
   (let ((value (get-text-property position 'font-lock-face text)))
     (if (listp value) (memq face value) (eq value face))))
 
-(ert-deftest gh-ui-faces-inherit-loaded-magit-faces ()
+(ert-deftest magh-ui-faces-inherit-loaded-magit-faces ()
   (should (featurep 'magit))
   (should (featurep 'magit-diff))
   (should (featurep 'magit-log))
   (should (featurep 'magit-process))
-  (dolist (mapping '((gh-section-heading . magit-section-heading)
-                     (gh-resource-number . magit-refname-pullreq)
-                     (gh-resource-title . magit-section-secondary-heading)
-                     (gh-conversation-kind . magit-section-secondary-heading)
-                     (gh-repository . magit-branch-remote)
-                     (gh-branch . magit-branch-local)
-                     (gh-author . magit-log-author)
-                     (gh-date . magit-log-date)
-                     (gh-tag . magit-tag)
-                     (gh-hash . magit-hash)
-                     (gh-workflow . magit-refname)
-                     (gh-file . magit-filename)
-                     (gh-label . magit-keyword)
-                     (gh-permission . magit-dimmed)
-                     (gh-added . magit-diffstat-added)
-                     (gh-removed . magit-diffstat-removed)
-                     (gh-open-state . magit-process-ok)
-                     (gh-pending-state . magit-branch-warning)
-                     (gh-draft-state . magit-dimmed)
-                     (gh-closed-state . magit-process-ng)
-                     (gh-metadata-key . magit-header-line-key)
-                     (gh-loading . magit-dimmed)
-                     (gh-error . magit-process-ng)))
+  (dolist (mapping '((magh-section-heading . magit-section-heading)
+                     (magh-resource-number . magit-refname-pullreq)
+                     (magh-resource-title . magit-section-secondary-heading)
+                     (magh-conversation-kind . magit-section-secondary-heading)
+                     (magh-repository . magit-branch-remote)
+                     (magh-branch . magit-branch-local)
+                     (magh-author . magit-log-author)
+                     (magh-date . magit-log-date)
+                     (magh-tag . magit-tag)
+                     (magh-hash . magit-hash)
+                     (magh-workflow . magit-refname)
+                     (magh-file . magit-filename)
+                     (magh-label . magit-keyword)
+                     (magh-permission . magit-dimmed)
+                     (magh-added . magit-diffstat-added)
+                     (magh-removed . magit-diffstat-removed)
+                     (magh-open-state . magit-process-ok)
+                     (magh-pending-state . magit-branch-warning)
+                     (magh-draft-state . magit-dimmed)
+                     (magh-closed-state . magit-process-ng)
+                     (magh-metadata-key . magit-header-line-key)
+                     (magh-loading . magit-dimmed)
+                     (magh-error . magit-process-ng)))
     (should (facep (car mapping)))
     (should (facep (cdr mapping)))
     (should (eq (face-attribute (car mapping) :inherit nil nil)
                 (cdr mapping))))
-  (should (eq (face-attribute 'gh-conversation-kind :weight nil nil) 'bold))
-  (should (facep 'gh-inline-comment))
-  (should (eq (face-attribute 'gh-inline-comment :extend nil nil) t)))
+  (should (eq (face-attribute 'magh-conversation-kind :weight nil nil) 'bold))
+  (should (facep 'magh-inline-comment))
+  (should (eq (face-attribute 'magh-inline-comment :extend nil nil) t)))
 
-(ert-deftest gh-ui-semantic-row-has-no-fixed-width-padding ()
-  (let* ((gh-date-format-function #'identity)
+(ert-deftest magh-ui-semantic-row-has-no-fixed-width-padding ()
+  (let* ((magh-date-format-function #'identity)
          (data '((number . 7) (title . "Issue title") (state . "OPEN")
                  (author . ((login . "alice")))
                  (updatedAt . "2026-07-02T00:00:00Z")))
-         (row (gh-ui--format-row (gh-issue--row-values data))))
+         (row (magh-ui--format-row (magh-issue--row-values data))))
     (should (equal row "OPEN #7 Issue title"))
-    (dolist (expected '(("OPEN" . gh-open-state)
-                        ("#7" . gh-resource-number)
-                        ("Issue title" . gh-resource-title)))
+    (dolist (expected '(("OPEN" . magh-open-state)
+                        ("#7" . magh-resource-number)
+                        ("Issue title" . magh-resource-title)))
       (let ((position (string-match (regexp-quote (car expected)) row)))
         (should position)
         (should (eq (get-text-property position 'font-lock-face row)
                     (cdr expected)))))))
 
-(ert-deftest gh-search-results-load-only-after-confirmation ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-search-results-load-only-after-confirmation ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (resource
-          (gh-search--resource
+          (magh-search--resource
            context 'code
            '((path . "src/a.el")
              (repository . ((nameWithOwner . "o/r")))
              (sha . "blob-sha")
              (url . "https://github.com/o/r/blob/deadbeef/src/a.el"))))
-         (candidate (gh-candidate-string "o/r src/a.el match" resource
-                                         'gh-search 0))
+         (candidate (magh-candidate-string "o/r src/a.el match" resource
+                                         'magh-search 0))
          opened)
     (dolist (kind '(repos issues prs code commits))
       (setq opened nil)
@@ -83,23 +83,23 @@
                    (funcall (plist-get options :lookup)
                             (substring-no-properties candidate)
                             (list candidate))))
-                ((symbol-function 'gh-resource-open)
+                ((symbol-function 'magh-resource-open)
                  (lambda (value) (setq opened value))))
-        (gh-search--consult context kind nil nil))
+        (magh-search--consult context kind nil nil))
       (should (eq opened resource)))
     (should (equal (plist-get opened :ref) "deadbeef"))))
 
-(ert-deftest gh-search-marginalia-owns-search-annotations ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-search-marginalia-owns-search-annotations ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (data '((fullName . "o/r") (visibility . "PUBLIC")
                  (stargazersCount . 12) (description . "Repository summary")))
-         (resource (gh-search--resource context 'repos data))
-         (display (gh-search--format resource))
-         (candidate (gh-candidate-string display resource 'gh-search 0))
-         (annotation (gh-search--marginalia-annotate candidate))
+         (resource (magh-search--resource context 'repos data))
+         (display (magh-search--format resource))
+         (candidate (magh-candidate-string display resource 'magh-search 0))
+         (annotation (magh-search--marginalia-annotate candidate))
          (annotation-text (substring-no-properties annotation)))
     (should (equal (substring-no-properties display) "o/r"))
-    (should (eq (get-text-property 0 'face display) 'gh-repository))
+    (should (eq (get-text-property 0 'face display) 'magh-repository))
     (should-not (string-match-p "12\\|Repository summary" display))
     (should (string-match-p "★12" annotation-text))
     (should (string-match-p "Repository summary" annotation-text))
@@ -110,22 +110,22 @@
         (should position)
         (should (eq (get-text-property position 'face annotation)
                     (cdr expected)))))
-    (should (equal (car (alist-get 'gh-search marginalia-annotators))
-                   'gh-search--marginalia-annotate))))
+    (should (equal (car (alist-get 'magh-search marginalia-annotators))
+                   'magh-search--marginalia-annotate))))
 
-(ert-deftest gh-search-marginalia-columns-use-semantic-colors ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-search-marginalia-columns-use-semantic-colors ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (issue
-          (gh-search--resource
+          (magh-search--resource
            context 'issues
            '((number . 7) (title . "Issue") (state . "OPEN")
              (author . ((login . "alice")))
              (repository . ((nameWithOwner . "o/r"))))))
          (issue-candidate
-          (gh-candidate-string (gh-search--format issue) issue 'gh-search 0))
-         (issue-annotation (gh-search--marginalia-annotate issue-candidate))
+          (magh-candidate-string (magh-search--format issue) issue 'magh-search 0))
+         (issue-annotation (magh-search--marginalia-annotate issue-candidate))
          (file
-          (gh-search--resource
+          (magh-search--resource
            context 'code
            '((path . "src/a.el")
              (repository . ((nameWithOwner . "o/r")))
@@ -133,55 +133,55 @@
              (textMatches . (((fragment . "matched code"))))
              (url . "https://github.com/o/r/blob/deadbeef/src/a.el"))))
          (file-candidate
-          (gh-candidate-string (gh-search--format file) file 'gh-search 0))
-         (file-display (gh-search--format file))
-         (file-annotation (gh-search--marginalia-annotate file-candidate)))
-    (should (eq (get-text-property 0 'face file-display) 'gh-file))
-    (dolist (case `((,issue-annotation "o/r" gh-repository)
-                    (,issue-annotation "OPEN" gh-open-state)
-                    (,issue-annotation "alice" gh-author)
-                    (,file-annotation "o/r" gh-repository)
+          (magh-candidate-string (magh-search--format file) file 'magh-search 0))
+         (file-display (magh-search--format file))
+         (file-annotation (magh-search--marginalia-annotate file-candidate)))
+    (should (eq (get-text-property 0 'face file-display) 'magh-file))
+    (dolist (case `((,issue-annotation "o/r" magh-repository)
+                    (,issue-annotation "OPEN" magh-open-state)
+                    (,issue-annotation "alice" magh-author)
+                    (,file-annotation "o/r" magh-repository)
                     (,file-annotation "matched code" font-lock-string-face)))
       (pcase-let ((`(,annotation ,text ,face) case))
       (let ((position (string-match (regexp-quote text) annotation)))
           (should position)
           (should (eq (get-text-property position 'face annotation) face)))))))
 
-(ert-deftest gh-search-repository-list-resources-have-native-actions ()
-  (let* ((context (gh-context-from-repository "o/r"))
-         (run (gh-search--resource
+(ert-deftest magh-search-repository-list-resources-have-native-actions ()
+  (let* ((context (magh-context-from-repository "o/r"))
+         (run (magh-search--resource
                context 'actions
                '((databaseId . 42) (displayTitle . "Build")
                  (conclusion . "SUCCESS") (workflowName . "CI")
                  (headBranch . "main") (event . "push"))))
-         (release (gh-search--resource
+         (release (magh-search--resource
                    context 'releases
                    '((tagName . "v1.0") (name . "Version 1"))))
-         (branch (gh-search--resource
+         (branch (magh-search--resource
                   context 'branches
                   '((name . "topic")
                     (commit . ((sha . "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))))))
     (should (eq (plist-get run :kind) 'run))
-    (should (equal (substring-no-properties (gh-search--format run))
+    (should (equal (substring-no-properties (magh-search--format run))
                    "SUCCESS Build CI main"))
     (should (eq (plist-get release :kind) 'release))
-    (should (equal (substring-no-properties (gh-search--format release))
+    (should (equal (substring-no-properties (magh-search--format release))
                    "PUBLISHED v1.0 Version 1"))
     (should (eq (plist-get branch :kind) 'branch))
-    (should (equal (gh-context-ref (plist-get branch :context)) "topic"))
-    (should (equal (substring-no-properties (gh-search--format branch))
+    (should (equal (magh-context-ref (plist-get branch :context)) "topic"))
+    (should (equal (substring-no-properties (magh-search--format branch))
                    "topic"))))
 
-(ert-deftest gh-repository-consult-search-routes-server-and-list-kinds ()
-  (let ((context (gh-context-from-repository "o/r")) calls)
-    (cl-letf (((symbol-function 'gh-consult-search)
+(ert-deftest magh-repository-consult-search-routes-server-and-list-kinds ()
+  (let ((context (magh-context-from-repository "o/r")) calls)
+    (cl-letf (((symbol-function 'magh-consult-search)
                (lambda (kind actual-context initial options)
                  (push (list 'server kind actual-context initial options) calls)))
-              ((symbol-function 'gh-search--consult-repository-list)
+              ((symbol-function 'magh-search--consult-repository-list)
                (lambda (actual-context kind initial)
                  (push (list 'list kind actual-context initial) calls))))
       (dolist (kind '(issues prs code commits actions releases branches))
-        (gh-repository-consult-search kind context "seed")))
+        (magh-repository-consult-search kind context "seed")))
     (dolist (kind '(issues prs code commits))
       (let ((call (seq-find (lambda (item)
                               (and (eq (car item) 'server)
@@ -197,21 +197,21 @@
                                (equal (nth 3 item) "seed")))
                         calls)))))
 
-(ert-deftest gh-repository-consult-list-shows-async-indicator-and-opens ()
-  (let ((context (gh-context-from-repository "o/r")) opened sessions)
-    (cl-letf (((symbol-function 'gh-api--run-list)
+(ert-deftest magh-repository-consult-list-shows-async-indicator-and-opens ()
+  (let ((context (magh-context-from-repository "o/r")) opened sessions)
+    (cl-letf (((symbol-function 'magh-api--run-list)
                (lambda (_context params success _error &optional _force)
-                 (should (equal params (list :limit gh-list-limit)))
-                 (gh-core--call-later
+                 (should (equal params (list :limit magh-list-limit)))
+                 (magh-core--call-later
                   success '(((databaseId . 42) (displayTitle . "Build"))))
                  'run-request))
-              ((symbol-function 'gh-api--release-list)
+              ((symbol-function 'magh-api--release-list)
                (lambda (_context success _error &optional _force)
-                 (gh-core--call-later success '(((tagName . "v1.0"))))
+                 (magh-core--call-later success '(((tagName . "v1.0"))))
                  'release-request))
-              ((symbol-function 'gh-api--repo-branches)
+              ((symbol-function 'magh-api--repo-branches)
                (lambda (_context success _error &optional _force)
-                 (gh-core--call-later success '(((name . "topic"))))
+                 (magh-core--call-later success '(((name . "topic"))))
                  'branch-request))
               ((symbol-function 'consult--read)
                (lambda (collection &rest options)
@@ -222,7 +222,7 @@
                      (funcall backend 'setup)
                      (funcall backend "seed"))
                    (should (member '[indicator running] events))
-                   (gh-test-wait
+                   (magh-test-wait
                     (lambda () (member '[indicator finished] events)))
                    (should (member '[indicator finished] events))
                    (should (memq 'refresh events))
@@ -233,48 +233,48 @@
                                     events)))
                      (push (list options events) sessions)
                      (car candidates)))))
-              ((symbol-function 'gh-resource-open)
+              ((symbol-function 'magh-resource-open)
                (lambda (resource) (push resource opened))))
       (dolist (kind '(actions releases branches))
-        (gh-search--consult-repository-list context kind "seed")))
+        (magh-search--consult-repository-list context kind "seed")))
     (should (equal (mapcar (lambda (resource) (plist-get resource :kind))
                            (nreverse opened))
                    '(run release branch)))
     (dolist (session sessions)
       (let ((options (car session)))
-        (should (equal (plist-get options :category) 'gh-search))
+        (should (equal (plist-get options :category) 'magh-search))
         (should (equal (plist-get options :initial) "seed"))
         (should (eq (plist-get options :lookup) #'consult--lookup-member))))))
 
-(ert-deftest gh-ui-magit-heading-preserves-row-faces ()
+(ert-deftest magh-ui-magit-heading-preserves-row-faces ()
   (let* ((case-fold-search nil)
-         (gh-date-format-function #'identity)
-         (gh-issue--limit 10)
+         (magh-date-format-function #'identity)
+         (magh-issue--limit 10)
          (data '(((number . 7) (title . "Issue title") (state . "OPEN")
                   (author . ((login . "alice")))
                   (updatedAt . "2026-07-02T00:00:00Z"))))
-         (text (gh-test-render-page
+         (text (magh-test-render-page
                 'issue-list "open"
                 (lambda (items)
-                  (gh-issue--render-list
-                   (gh-context-from-repository "o/r") "open" items))
+                  (magh-issue--render-list
+                   (magh-context-from-repository "o/r") "open" items))
                 data)))
     (should (string-match-p
              "OPEN #7 Issue title\n" text))
     (should (string-match-p
              "OPEN #7 Issue title\n\nLoad more" text))
-    (dolist (expected '(("OPEN" . gh-open-state)
-                        ("#7" . gh-resource-number)
-                        ("Issue title" . gh-resource-title)))
+    (dolist (expected '(("OPEN" . magh-open-state)
+                        ("#7" . magh-resource-number)
+                        ("Issue title" . magh-resource-title)))
       (let ((position (string-match (regexp-quote (car expected)) text)))
         (should position)
         (should (eq (get-text-property position 'font-lock-face text)
                     (cdr expected)))))))
 
-(ert-deftest gh-ui-repository-status-rows-follow-ui-layout ()
+(ert-deftest magh-ui-repository-status-rows-follow-ui-layout ()
   (let* ((case-fold-search nil)
-         (gh-date-format-function #'identity)
-         (context (gh-context-from-repository "o/r"))
+         (magh-date-format-function #'identity)
+         (context (magh-context-from-repository "o/r"))
          (result
           '((repository . ((nameWithOwner . "o/r") (visibility . "PUBLIC")
                            (defaultBranchRef . ((name . "main")))
@@ -310,9 +310,9 @@
                          ((tagName . "v4.0") (name . "Version 4"))
                          ((tagName . "v5.0") (name . "Version 5"))
                          ((tagName . "v6.0") (name . "Version 6"))))))
-         (text (gh-test-render-page
+         (text (magh-test-render-page
                 'repository "o/r"
-                (lambda (data) (gh-repo--render-status context data)) result)))
+                (lambda (data) (magh-repo--render-status context data)) result)))
     (should (string-match-p
              (regexp-quote
               "OPEN #8 PR title REVIEW_REQUIRED\n")
@@ -333,7 +333,7 @@
       (should position)
       (should (eq (lookup-key (get-text-property position 'keymap text)
                               (kbd "<mouse-1>"))
-                  'gh-repo-branch-click)))
+                  'magh-repo-branch-click)))
     (should (string-match-p "Recent commits\n" text))
     (should (string-match-p
              (regexp-quote
@@ -348,57 +348,57 @@
                  text))
     (should-not (string-match-p "v6.0" text))
     (should-not (string-match-p "#42.*Run title" text))
-    (dolist (expected '(("#8" . gh-resource-number)
-                        ("PR title" . gh-resource-title)
-                        ("REVIEW_REQUIRED" . gh-pending-state)
-                        ("Run title" . gh-resource-title)
-                        ("CI" . gh-workflow)))
+    (dolist (expected '(("#8" . magh-resource-number)
+                        ("PR title" . magh-resource-title)
+                        ("REVIEW_REQUIRED" . magh-pending-state)
+                        ("Run title" . magh-resource-title)
+                        ("CI" . magh-workflow)))
       (let ((position (string-match (regexp-quote (car expected)) text)))
         (should position)
         (should (eq (get-text-property position 'font-lock-face text)
                     (cdr expected)))))))
 
-(ert-deftest gh-ui-repository-branch-resource-switches-status-ref ()
-  (let* ((context (gh-context-from-repository "o/r"))
-         (resource (gh-repo--branch-resource
+(ert-deftest magh-ui-repository-branch-resource-switches-status-ref ()
+  (let* ((context (magh-context-from-repository "o/r"))
+         (resource (magh-repo--branch-resource
                     context '((name . "topic"))))
          opened)
     (should (eq (plist-get resource :kind) 'branch))
-    (should (equal (gh-context-ref (plist-get resource :context)) "topic"))
-    (should-not (gh-context-branch (plist-get resource :context)))
-    (cl-letf (((symbol-function 'gh-repo-status)
+    (should (equal (magh-context-ref (plist-get resource :context)) "topic"))
+    (should-not (magh-context-branch (plist-get resource :context)))
+    (cl-letf (((symbol-function 'magh-repo-status)
                (lambda (branch-context) (setq opened branch-context))))
-      (gh-resource-open resource))
-    (should (equal (gh-context-ref opened) "topic"))))
+      (magh-resource-open resource))
+    (should (equal (magh-context-ref opened) "topic"))))
 
-(ert-deftest gh-ui-list-metadata-is-inside-expanded-details ()
-  (let ((context (gh-context-from-repository "o/r"))
-        (gh-date-format-function #'identity))
+(ert-deftest magh-ui-list-metadata-is-inside-expanded-details ()
+  (let ((context (magh-context-from-repository "o/r"))
+        (magh-date-format-function #'identity))
     (dolist
         (case
          `((,(lambda ()
-               (gh-issue--insert-row
+               (magh-issue--insert-row
                 context
                 '((number . 7) (title . "Issue") (state . "OPEN")
                   (author . ((login . "alice")))
                   (createdAt . "created") (updatedAt . "updated"))))
             "OPEN #7 Issue\n" "Author: alice\n" "Updated: updated\n")
            (,(lambda ()
-               (gh-pr--insert-row
+               (magh-pr--insert-row
                 context
                 '((number . 8) (title . "PR") (state . "OPEN")
                   (author . ((login . "bob")))
                   (createdAt . "created") (updatedAt . "updated"))))
             "OPEN #8 PR\n" "Author: bob\n" "Updated: updated\n")
            (,(lambda ()
-               (gh-actions--insert-run
+               (magh-actions--insert-run
                 context
                 '((databaseId . 9) (displayTitle . "CI")
                   (status . "queued") (workflowName . "Build")
                   (createdAt . "created"))))
             "QUEUED CI Build\n" "Created: created\n")))
       (with-temp-buffer
-        (gh-section-mode)
+        (magh-section-mode)
         (let ((inhibit-read-only t))
           (magit-insert-section (root)
             (funcall (car case))))
@@ -411,9 +411,9 @@
           (when-let* ((updated (nth 3 case)))
             (should (string-match-p updated (buffer-string)))))))))
 
-(ert-deftest gh-ui-repository-permission-and-date-are-expanded-details ()
-  (let ((context (gh-context-from-repository "o/r"))
-        (gh-date-format-function #'identity)
+(ert-deftest magh-ui-repository-permission-and-date-are-expanded-details ()
+  (let ((context (magh-context-from-repository "o/r"))
+        (magh-date-format-function #'identity)
         (result
          '((user . ((login . "me") (followers . 0) (following . 0)))
            (repositories . (((nameWithOwner . "o/r")
@@ -421,12 +421,12 @@
                              (viewerPermission . "ADMIN")
                              (updatedAt . "updated")))))))
     (with-temp-buffer
-      (gh-section-mode)
-      (setq gh-buffer-context context
-            gh-buffer-resource-kind 'user-status
-            gh-buffer-resource-id 'viewer)
-      (gh-ui--replace
-       (lambda (data) (gh-pages--render-user-status context data)) result nil)
+      (magh-section-mode)
+      (setq magh-buffer-context context
+            magh-buffer-resource-kind 'user-status
+            magh-buffer-resource-id 'viewer)
+      (magh-ui--replace
+       (lambda (data) (magh-pages--render-user-status context data)) result nil)
       (let* ((repositories
               (seq-find (lambda (section)
                           (eq (oref section type) 'repositories))
@@ -444,37 +444,37 @@
         (should (string-match-p "Permission: ADMIN\n" (buffer-string)))
         (should (string-match-p "Updated: updated\n" (buffer-string)))))))
 
-(ert-deftest gh-ui-language-statistics-only-show-percentages ()
+(ert-deftest magh-ui-language-statistics-only-show-percentages ()
   (with-temp-buffer
-    (gh-repo--insert-languages '((Emacs\ Lisp . 75) (Shell . 25)))
+    (magh-repo--insert-languages '((Emacs\ Lisp . 75) (Shell . 25)))
     (should (equal (buffer-string)
                    "Emacs Lisp: 75.0%\nShell: 25.0%\n"))
     (should-not (string-match-p "bytes\\|Size:" (buffer-string)))))
 
-(ert-deftest gh-ui-repository-stats-omit-negative-viewer-states ()
+(ert-deftest magh-ui-repository-stats-omit-negative-viewer-states ()
   (should
-   (equal (gh-repo--stats
+   (equal (magh-repo--stats
            '((stargazerCount . 12) (forkCount . 3)
              (watchers . ((totalCount . 4)))
              (viewerHasStarred . nil) (viewerSubscription . "IGNORED"))
            nil)
           "12 stars, 3 forks, 4 watchers")))
 
-(ert-deftest gh-ui-comment-sections-have-a-blank-line-between-siblings ()
+(ert-deftest magh-ui-comment-sections-have-a-blank-line-between-siblings ()
   (with-temp-buffer
     (magit-section-mode)
     (let ((inhibit-read-only t))
       (magit-insert-section (root)
-        (gh-ui--section (conversation 'conversation nil nil)
+        (magh-ui--section (conversation 'conversation nil nil)
           "Conversation"
-          (gh-ui--section (comment 1 nil nil) "First comment")
-          (gh-ui--section (comment 2 nil nil) "Second comment"))))
+          (magh-ui--section (comment 1 nil nil) "First comment")
+          (magh-ui--section (comment 2 nil nil) "Second comment"))))
     (should (string-match-p
              "First comment\n\nSecond comment\n" (buffer-string)))))
 
-(ert-deftest gh-ui-conversation-kind-labels-use-bold-highlight-face ()
-  (let* ((gh-date-format-function #'identity)
-         (context (gh-context-from-repository "o/r"))
+(ert-deftest magh-ui-conversation-kind-labels-use-bold-highlight-face ()
+  (let* ((magh-date-format-function #'identity)
+         (context (magh-context-from-repository "o/r"))
          (items
           '((comment . ((id . "c1") (author . ((login . "alice")))
                         (createdAt . "2026-07-01") (body . "Comment body")))
@@ -485,20 +485,20 @@
                        (created_at . "2026-07-03") (path . "a.el")
                        (line . 7) (body . "Inline body")))))
          (text
-          (gh-test-render-page
+          (magh-test-render-page
            'conversation 1
            (lambda (_)
-             (gh-pr--render-conversation context 1 items))
+             (magh-pr--render-conversation context 1 items))
            nil)))
     (dolist (label '("Comment" "Review" "Inline comment"))
       (let ((position (string-match (regexp-quote label) text)))
         (should position)
-        (should (gh-test-font-lock-face-p
-                 text position 'gh-conversation-kind))))))
+        (should (magh-test-font-lock-face-p
+                 text position 'magh-conversation-kind))))))
 
-(ert-deftest gh-ui-comment-kind-labels-use-conversation-face ()
-  (let* ((gh-date-format-function #'identity)
-         (context (gh-context-from-repository "o/r"))
+(ert-deftest magh-ui-comment-kind-labels-use-conversation-face ()
+  (let* ((magh-date-format-function #'identity)
+         (context (magh-context-from-repository "o/r"))
          (comment '((id . 1) (user . ((login . "alice")))
                     (created_at . "2026-07-01") (body . "Comment body")))
          (issue-comment
@@ -513,75 +513,75 @@
                  (user . ((login . "alice"))) (body . "Inline body"))))))
          (entries
           `(("Comment"
-             . ,(gh-test-render-page
+             . ,(magh-test-render-page
                  'issue 1
-                 (lambda (_) (gh-issue--render-comment context issue-comment))
+                 (lambda (_) (magh-issue--render-comment context issue-comment))
                  nil))
             ("Comment"
-             . ,(gh-test-render-page
+             . ,(magh-test-render-page
                  'commit "aaaaaaaa"
                  (lambda (_)
-                   (gh-commit--insert-commit-comment
+                   (magh-commit--insert-commit-comment
                     context "aaaaaaaa" comment))
                  nil))
             ("Inline comment"
-             . ,(gh-test-render-page
+             . ,(magh-test-render-page
                  'commit "aaaaaaaa"
                  (lambda (_)
-                   (gh-commit--insert-commit-comment
+                   (magh-commit--insert-commit-comment
                     context "aaaaaaaa" comment t))
                  nil))
             ("Comment"
-             . ,(gh-test-render-page
+             . ,(magh-test-render-page
                  'commit-review 1
                  (lambda (_)
-                   (gh-commit--insert-review-comment context comment))
+                   (magh-commit--insert-review-comment context comment))
                  nil))
             ("Reply"
-             . ,(gh-test-render-page
+             . ,(magh-test-render-page
                  'commit-review 1
                  (lambda (_)
-                   (gh-commit--insert-review-comment context comment t))
+                   (magh-commit--insert-review-comment context comment t))
                  nil))
             ("Inline comment"
-             . ,(gh-test-render-page
+             . ,(magh-test-render-page
                  'pr 1
-                 (lambda (data) (gh-pr--render-files context 1 data))
+                 (lambda (data) (magh-pr--render-files context 1 data))
                  files-result)))))
     (dolist (entry entries)
       (let* ((label (car entry))
              (text (cdr entry))
              (position (string-match (concat label " by alice") text)))
         (should position)
-        (should (gh-test-font-lock-face-p
-                 text position 'gh-conversation-kind))
-        (should-not (gh-test-font-lock-face-p
+        (should (magh-test-font-lock-face-p
+                 text position 'magh-conversation-kind))
+        (should-not (magh-test-font-lock-face-p
                      text (+ position (length label))
-                     'gh-conversation-kind))))))
+                     'magh-conversation-kind))))))
 
-(ert-deftest gh-ui-inline-comment-blocks-use-background-face ()
-  (let* ((gh-date-format-function #'identity)
-         (context (gh-context-from-repository "o/r"))
+(ert-deftest magh-ui-inline-comment-blocks-use-background-face ()
+  (let* ((magh-date-format-function #'identity)
+         (context (magh-context-from-repository "o/r"))
          (comment '((id . 1) (path . "a.el") (line . 7) (position . 2)
                     (user . ((login . "alice")))
                     (created_at . "2026-07-01") (body . "Commit inline body")))
          (commit-inline
-          (gh-test-render-page
+          (magh-test-render-page
            'commit "HEAD"
            (lambda (_)
-             (gh-commit--insert-commit-comment context "HEAD" comment t))
+             (magh-commit--insert-commit-comment context "HEAD" comment t))
            nil))
          (commit-general
-          (gh-test-render-page
+          (magh-test-render-page
            'commit "HEAD"
            (lambda (_)
-             (gh-commit--insert-commit-comment context "HEAD" comment))
+             (magh-commit--insert-commit-comment context "HEAD" comment))
            nil))
          (pr-inline
-          (gh-test-render-page
+          (magh-test-render-page
            'pr 1
            (lambda (_)
-             (gh-pr--render-conversation
+             (magh-pr--render-conversation
               context 1
               '((inline . ((id . 2) (path . "a.el") (line . 7)
                            (user . ((login . "bob")))
@@ -596,8 +596,8 @@
                                     position 'font-lock-face text))))
                    (should position)
                    (if (listp face)
-                       (memq 'gh-inline-comment face)
-                     (eq face 'gh-inline-comment)))))
+                       (memq 'magh-inline-comment face)
+                     (eq face 'magh-inline-comment)))))
       (dolist (spec `((,commit-inline "Inline comment" "Location" "Commit inline body")
                       (,pr-inline "Inline comment" "Location" "PR inline body")))
         (dolist (needle (cdr spec))
@@ -605,9 +605,9 @@
       (should-not (has-inline-face-p "Comment" commit-general))
       (should-not (has-inline-face-p "Commit inline body" commit-general)))))
 
-(ert-deftest gh-pr-conversation-review-items-open-the-pr-review ()
-  (let* ((gh-date-format-function #'identity)
-         (context (gh-context-from-repository "base/repo"))
+(ert-deftest magh-pr-conversation-review-items-open-the-pr-review ()
+  (let* ((magh-date-format-function #'identity)
+         (context (magh-context-from-repository "base/repo"))
          (head-oid "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
          (items
           `((review . ((id . "r1") (author . ((login . "alice")))
@@ -617,10 +617,10 @@
                        (created_at . "created") (path . "src/a.el")
                        (line . 7) (body . "Inline body")))))
          (text
-          (gh-test-render-page
+          (magh-test-render-page
            'conversation 1
            (lambda (_)
-             (gh-pr--render-conversation
+             (magh-pr--render-conversation
               context 7 items))
            nil)))
     (should-not (string-match-p "Author: alice\n" text))
@@ -629,19 +629,19 @@
                     ("Inline comment by bob" :comment-id 2)))
       (let* ((position (string-match (car spec) text))
              (resource (and position
-                            (get-text-property position 'gh-resource text))))
+                            (get-text-property position 'magh-resource text))))
         (should resource)
         (should (eq (plist-get resource :kind) 'commit-review))
         (should (= (plist-get resource :number) 7))
         (should (equal (plist-get resource (nth 1 spec)) (nth 2 spec)))))
     (let* ((position (string-match "src/a.el:7" text))
            (resource (and position
-                          (get-text-property position 'gh-resource text))))
+                          (get-text-property position 'magh-resource text))))
       (should (equal (plist-get resource :path) "src/a.el"))
       (should (= (plist-get resource :line) 7)))))
 
-(ert-deftest gh-pr-files-open-the-pr-review ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-pr-files-open-the-pr-review ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (result
           '((pr . ((number . 7) (title . "Review me") (state . "OPEN")
                    (headRefName . "topic") (baseRefName . "main")
@@ -651,37 +651,37 @@
                        (additions . 2) (deletions . 1))))
             (review-comments . nil)))
          (text
-          (gh-test-render-page
+          (magh-test-render-page
            'pr 7
-           (lambda (data) (gh-pr--render-view context data))
+           (lambda (data) (magh-pr--render-view context data))
            result)))
     (dolist (spec '(("Files (1)" nil)
                     ("src/a.el" "src/a.el")))
       (let* ((position (string-match (car spec) text))
              (resource (and position
-                            (get-text-property position 'gh-resource text))))
+                            (get-text-property position 'magh-resource text))))
         (should resource)
         (should (eq (plist-get resource :kind) 'commit-review))
         (should (= (plist-get resource :number) 7))
         (should (equal (plist-get resource :path) (cadr spec)))))))
 
-(ert-deftest gh-ui-prose-sections-enable-visual-line-mode ()
+(ert-deftest magh-ui-prose-sections-enable-visual-line-mode ()
   (with-temp-buffer
-    (gh-section-mode)
+    (magh-section-mode)
     (should-not visual-line-mode)
     (let ((inhibit-read-only t))
       (magit-insert-section (root)
-        (gh-ui--section (description 'description nil nil)
+        (magh-ui--section (description 'description nil nil)
           "One-line description")))
     (should visual-line-mode))
   (with-temp-buffer
     (should-not visual-line-mode)
-    (gh-ui--insert-markdown "Comment body")
+    (magh-ui--insert-markdown "Comment body")
     (should visual-line-mode)))
 
-(ert-deftest gh-ui-actions-log-groups-repeated-job-and-step-columns ()
+(ert-deftest magh-ui-actions-log-groups-repeated-job-and-step-columns ()
   (let ((text
-         (gh-actions--simplify-log
+         (magh-actions--simplify-log
           (concat "build\tcheckout\t2026-07-15T12:34:56.1234567Z first\n"
                   "build\tcheckout\t2026-07-15T12:34:57Z second\n"
                   "build\ttest\t2026-07-15T12:35:01Z test\n"
@@ -690,14 +690,14 @@
      (equal (substring-no-properties text)
             (concat "build\n  checkout\n12:34:56 first\n12:34:57 second\n"
                     "  test\n12:35:01 test\n\nlint\n  setup\nplain line\n")))
-    (should (eq (get-text-property 0 'font-lock-face text) 'gh-workflow))))
+    (should (eq (get-text-property 0 'font-lock-face text) 'magh-workflow))))
 
-(ert-deftest gh-ui-description-has-an-explicit-heading ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-ui-description-has-an-explicit-heading ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (text
-          (gh-test-render-page
+          (magh-test-render-page
            'issue 1
-           (lambda (data) (gh-issue--render-view context data))
+           (lambda (data) (magh-issue--render-view context data))
            '((number . 1) (title . "Issue") (state . "OPEN")
              (body . "Summary\n\nBody text")))))
     (should (string-match-p "#1 Issue\n" text))
@@ -708,9 +708,9 @@
         (setq count (1+ count) position (match-end 0)))
       (should (= count 1)))))
 
-(ert-deftest gh-ui-diff-preserves-added-and-removed-line-faces ()
+(ert-deftest magh-ui-diff-preserves-added-and-removed-line-faces ()
   (with-temp-buffer
-    (gh-ui--insert-diff
+    (magh-ui--insert-diff
      "diff --git a/a.el b/a.el\n--- a/a.el\n+++ b/a.el\n@@ -1 +1 @@\n-old\n+new\n")
     (dolist (expected '(("-old" . diff-removed) ("+new" . diff-added)))
       (goto-char (point-min))
@@ -720,14 +720,14 @@
                     (memq (cdr expected) face)
                   (eq face (cdr expected))))))))
 
-(defun gh-test-render-page (kind id renderer data)
+(defun magh-test-render-page (kind id renderer data)
   "Render DATA with RENDERER as a KIND page and return its text."
   (with-temp-buffer
-    (gh-section-mode)
-    (setq gh-buffer-context (gh-context-from-repository "o/r")
-          gh-buffer-resource-kind kind
-          gh-buffer-resource-id id)
-    (gh-ui--replace renderer data nil)
+    (magh-section-mode)
+    (setq magh-buffer-context (magh-context-from-repository "o/r")
+          magh-buffer-resource-kind kind
+          magh-buffer-resource-id id)
+    (magh-ui--replace renderer data nil)
     (should magit-root-section)
     ;; Reproduce the just-in-time refontification that happens after an
     ;; asynchronous renderer yields back to interactive Emacs.
@@ -735,19 +735,19 @@
     (font-lock-ensure (point-min) (point-max))
     (buffer-string)))
 
-(ert-deftest gh-ui-late-generation-cannot-overwrite-newer-page ()
-  (let ((gh-display-buffer-function (lambda (buffer) buffer))
+(ert-deftest magh-ui-late-generation-cannot-overwrite-newer-page ()
+  (let ((magh-display-buffer-function (lambda (buffer) buffer))
         callbacks
-        (context (gh-context-from-repository "o/r")))
+        (context (magh-context-from-repository "o/r")))
     (let ((buffer
-           (gh-ui--open-page
-            " *gh generation test*" context 'repository "o/r"
+           (magh-ui--open-page
+            " *magh generation test*" context 'repository "o/r"
             (lambda (success error _force)
               (push (cons success error) callbacks))
             (lambda (data) (insert (format "value=%s" data))))))
       (unwind-protect
           (with-current-buffer buffer
-            (gh-ui-refresh t)
+            (magh-ui-refresh t)
             (should (= (length callbacks) 2))
             (let ((new (car callbacks)) (old (cadr callbacks)))
               (funcall (car new) "new")
@@ -756,20 +756,20 @@
             (should-not (string-match-p "value=old" (buffer-string))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
-(ert-deftest gh-ui-visibility-survives-page-recreation-via-magit-cache ()
-  (let ((gh-display-buffer-function #'identity)
-        (gh-section-cache-visibility t)
-        (gh-ui--visibility-cache (make-hash-table :test #'equal))
-        (context (gh-context-from-repository "o/r"))
+(ert-deftest magh-ui-visibility-survives-page-recreation-via-magit-cache ()
+  (let ((magh-display-buffer-function #'identity)
+        (magh-section-cache-visibility t)
+        (magh-ui--visibility-cache (make-hash-table :test #'equal))
+        (context (magh-context-from-repository "o/r"))
         callback)
     (cl-labels
         ((open-page
           ()
-          (gh-ui--open-page
-           " *gh visibility test*" context 'issue-list 'open
+          (magh-ui--open-page
+           " *magh visibility test*" context 'issue-list 'open
            (lambda (success _error _force) (setq callback success))
            (lambda (_data)
-             (gh-ui--section (items 'items nil t)
+             (magh-ui--section (items 'items nil t)
                "Items"
                (insert "Body\n"))))))
       (let ((buffer (open-page)))
@@ -786,37 +786,37 @@
                (oref (car (oref magit-root-section children)) hidden)))
           (kill-buffer buffer))))))
 
-(ert-deftest gh-ui-markdown-creates-native-reference-buttons ()
-  (let ((context (gh-context-from-repository "o/r"))
-        (gh-view-inline-images nil))
+(ert-deftest magh-ui-markdown-creates-native-reference-buttons ()
+  (let ((context (magh-context-from-repository "o/r"))
+        (magh-view-inline-images nil))
     (with-temp-buffer
-      (gh-ui--insert-markdown
+      (magh-ui--insert-markdown
        "Fixes #12 by @octocat in deadbee and https://github.com/o/r/pull/9"
        context)
       (goto-char (point-min))
       (search-forward "#12")
-      (should (eq (plist-get (button-get (button-at (1- (point))) 'gh-resource)
+      (should (eq (plist-get (button-get (button-at (1- (point))) 'magh-resource)
                              :kind)
                   'issue))
       (search-forward "@octocat")
-      (should (eq (plist-get (button-get (button-at (1- (point))) 'gh-resource)
+      (should (eq (plist-get (button-get (button-at (1- (point))) 'magh-resource)
                              :kind)
                   'user))
       (search-forward "deadbee")
-      (should (eq (plist-get (button-get (button-at (1- (point))) 'gh-resource)
+      (should (eq (plist-get (button-get (button-at (1- (point))) 'magh-resource)
                              :kind)
                   'commit)))))
 
-(ert-deftest gh-ui-markdown-normalizes-carriage-return-line-endings ()
-  (let ((gh-view-inline-images nil))
+(ert-deftest magh-ui-markdown-normalizes-carriage-return-line-endings ()
+  (let ((magh-view-inline-images nil))
     (with-temp-buffer
-      (gh-ui--insert-markdown "First\r\nSecond\rThird")
+      (magh-ui--insert-markdown "First\r\nSecond\rThird")
       (should (equal (buffer-substring-no-properties (point-min) (point-max))
                      "First\nSecond\nThird\n"))
       (should-not (string-match-p "\r" (buffer-string))))))
 
-(ert-deftest gh-ui-resource-renderers-accept-representative-data ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-ui-resource-renderers-accept-representative-data ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (issue
           '((number . 7) (title . "Issue title") (state . "OPEN")
             (author . ((login . "alice")))
@@ -878,60 +878,60 @@
                           (created_at . "2026-07-02T00:00:00Z")
                           (body . "Looks good"))))
             (diff . "diff --git a/src/a.el b/src/a.el\n-old\n+new"))))
-    (let ((text (gh-test-render-page
+    (let ((text (magh-test-render-page
                  'issue 7
-                 (lambda (data) (gh-issue--render-view context data))
+                 (lambda (data) (magh-issue--render-view context data))
                  issue)))
       (should (string-match-p "Issue title" text))
       (should (string-match-p "Description\nFixes #3\n" text))
       (should (string-match-p "Comment by bob" text)))
-    (let ((text (gh-test-render-page
+    (let ((text (magh-test-render-page
                  'pr 8
-                 (lambda (data) (gh-pr--render-view context data))
+                 (lambda (data) (magh-pr--render-view context data))
                  pr)))
       (should (string-match-p "Checks (1)" text))
       (should (string-match-p "Description\nPR body\n" text)))
     (should (string-match-p "checkout"
-                            (gh-test-render-page
+                            (magh-test-render-page
                              'run 42
-                             (lambda (data) (gh-actions--render-run context data))
+                             (lambda (data) (magh-actions--render-run context data))
                              run)))
-    (let ((text (gh-test-render-page
+    (let ((text (magh-test-render-page
                  'release "v1.0"
-                 (lambda (data) (gh-release--render-view context data))
+                 (lambda (data) (magh-release--render-view context data))
                  release)))
       (should (string-match-p "asset.zip" text))
       (should (string-match-p "Release notes\nNotes\n" text)))
-    (let ((text (gh-test-render-page
+    (let ((text (magh-test-render-page
                  'commit "aaaaaaaa"
-                 (lambda (data) (gh-commit--render-view context data))
+                 (lambda (data) (magh-commit--render-view context data))
                  commit)))
       (should (string-match-p "Changed files (1)" text))
       (should (string-match-p "Commit subject\n" text))
       (should-not (string-match-p "Message\n" text))
       (should (string-match-p "Comment by bob" text)))))
 
-(ert-deftest gh-magit-status-hook-only-starts-async-work-and-renders-loading ()
-  (let ((context (gh-context-copy (gh-context-from-repository "o/r")
+(ert-deftest magh-magit-status-hook-only-starts-async-work-and-renders-loading ()
+  (let ((context (magh-context-copy (magh-context-from-repository "o/r")
                                   :branch "main"))
-        (gh-magit-status-sections '(pr issue run))
-        (gh-hide-forge-duplicates nil)
-        (gh-magit-summary-scope 'repository)
-        (gh-magit--cache (make-hash-table :test #'equal))
+        (magh-magit-status-sections '(pr issue run))
+        (magh-hide-forge-duplicates nil)
+        (magh-magit-summary-scope 'repository)
+        (magh-magit--cache (make-hash-table :test #'equal))
         calls)
-    (cl-letf (((symbol-function 'gh-magit--context) (lambda () context))
-              ((symbol-function 'gh-api--pr-list)
+    (cl-letf (((symbol-function 'magh-magit--context) (lambda () context))
+              ((symbol-function 'magh-api--pr-list)
                (lambda (&rest _) (push 'pr calls) 'request))
-              ((symbol-function 'gh-api--issue-list)
+              ((symbol-function 'magh-api--issue-list)
                (lambda (&rest _) (push 'issue calls) 'request))
-              ((symbol-function 'gh-api--run-list)
+              ((symbol-function 'magh-api--run-list)
                (lambda (&rest _) (push 'run calls) 'request)))
       (with-temp-buffer
         (let ((inhibit-read-only t))
           (magit-insert-section (status)
             (magit-insert-section (recent)
               (magit-insert-heading "Recent commits"))
-            (gh-magit-insert-github)))
+            (magh-magit-insert-github)))
         (should (string-match-p "loading…" (buffer-string)))
         (should (string-match-p
                  "Recent commits\n\nGitHub\n  loading…" (buffer-string)))
@@ -940,17 +940,17 @@
                                (string< (symbol-name a) (symbol-name b))))
                        '(issue pr run)))))))
 
-(ert-deftest gh-magit-forge-duplicate-policy-keeps-actions ()
-  (let ((gh-hide-forge-duplicates t)
-        (gh-magit-status-sections '(pr issue run)))
+(ert-deftest magh-magit-forge-duplicate-policy-keeps-actions ()
+  (let ((magh-hide-forge-duplicates t)
+        (magh-magit-status-sections '(pr issue run)))
     (cl-letf (((symbol-function 'featurep)
                (lambda (feature) (eq feature 'forge))))
-      (should (equal (gh-magit--effective-sections) '(run))))))
+      (should (equal (magh-magit--effective-sections) '(run))))))
 
-(ert-deftest gh-commit-review-patch-parser-maps-lines-and-sides ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-commit-review-patch-parser-maps-lines-and-sides ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (records
-          (gh-commit--parse-patch-lines
+          (magh-commit--parse-patch-lines
            (concat "@@ -2,3 +2,3 @@\n"
                    " context\n-old\n+new\n"
                    "@@ -10 +10,2 @@\n+next\n context2")
@@ -970,61 +970,61 @@
                      (10 "RIGHT" 2 5)
                      (11 "RIGHT" 2 6))))))
 
-(ert-deftest gh-commit-review-selection-builds-multiline-location ()
-  (let ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-commit-review-selection-builds-multiline-location ()
+  (let ((context (magh-context-from-repository "o/r"))
         (transient-mark-mode t))
     (with-temp-buffer
       (dolist (line '(4 5))
         (let ((start (point))
-              (resource (gh-resource-create
+              (resource (magh-resource-create
                          'review-line context :path "src/a.el" :line line
                          :side "RIGHT" :hunk 1)))
           (insert "+code\n")
-          (add-text-properties start (point) (list 'gh-resource resource))))
+          (add-text-properties start (point) (list 'magh-resource resource))))
       (goto-char (point-min))
       (set-mark (point-max))
       (setq mark-active t)
-      (should (equal (gh-commit--review-selection)
+      (should (equal (magh-commit--review-selection)
                      '(:path "src/a.el" :line 5 :side "RIGHT"
                        :subject-type "LINE" :start-line 4
                        :start-side "RIGHT"))))))
 
-(ert-deftest gh-commit-review-selection-rejects-mixed-sides ()
-  (let ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-commit-review-selection-rejects-mixed-sides ()
+  (let ((context (magh-context-from-repository "o/r"))
         (transient-mark-mode t))
     (with-temp-buffer
       (dolist (spec '((4 "LEFT") (4 "RIGHT")))
         (let ((start (point))
-              (resource (gh-resource-create
+              (resource (magh-resource-create
                          'review-line context :path "src/a.el"
                          :line (car spec) :side (cadr spec) :hunk 1)))
           (insert "diff\n")
-          (add-text-properties start (point) (list 'gh-resource resource))))
+          (add-text-properties start (point) (list 'magh-resource resource))))
       (goto-char (point-min))
       (set-mark (point-max))
       (setq mark-active t)
-      (should-error (gh-commit--review-selection) :type 'user-error))))
+      (should-error (magh-commit--review-selection) :type 'user-error))))
 
-(ert-deftest gh-commit-inline-selection-anchors-region-to-final-position ()
-  (let ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-commit-inline-selection-anchors-region-to-final-position ()
+  (let ((context (magh-context-from-repository "o/r"))
         (transient-mark-mode t))
     (with-temp-buffer
       (dolist (spec '((3 "LEFT" 2) (3 "RIGHT" 3)))
         (let ((start (point))
               (resource
-               (gh-resource-create
+               (magh-resource-create
                 'commit-line context :path "src/a.el" :line (nth 0 spec)
                 :side (nth 1 spec) :position (nth 2 spec) :hunk 1)))
           (insert "diff\n")
-          (add-text-properties start (point) (list 'gh-resource resource))))
+          (add-text-properties start (point) (list 'magh-resource resource))))
       (goto-char (point-min))
       (set-mark (point-max))
       (setq mark-active t)
-      (should (equal (gh-commit--commit-selection)
+      (should (equal (magh-commit--commit-selection)
                      '(:path "src/a.el" :position 3 :line 3))))))
 
-(ert-deftest gh-commit-renderer-places-positioned-comments-inline ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-commit-renderer-places-positioned-comments-inline ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (data
           '((commit . ((sha . "HEAD")
                        (commit . ((message . "Commit subject")
@@ -1043,15 +1043,15 @@
                           (body . "Inline body"))))
             (diff . "diff --git a/src/a.el b/src/a.el\n-old\n+new")))
          (text
-          (gh-test-render-page
+          (magh-test-render-page
            'commit "HEAD"
-           (lambda (result) (gh-commit--render-view context result))
+           (lambda (result) (magh-commit--render-view context result))
            data)))
     (should (string-match-p "Inline comment by bob" text))
     (should (string-match-p "Location: src/a.el:1" text))
     (should (string-match-p "Inline body" text))))
 
-(ert-deftest gh-commit-full-diff-groups-files-and-hunks ()
+(ert-deftest magh-commit-full-diff-groups-files-and-hunks ()
   (let* ((diff (concat
                 "diff --git a/a.el b/a.el\n"
                 "index 1111111..2222222 100644\n"
@@ -1062,7 +1062,7 @@
                 "new file mode 100644\n"
                 "--- /dev/null\n+++ b/b.el\n"
                 "@@ -0,0 +1 @@\n+hello\n"))
-         (files (gh-commit--split-full-diff diff)))
+         (files (magh-commit--split-full-diff diff)))
     (should (= (length files) 2))
     (should (equal (mapcar (lambda (file) (plist-get file :heading)) files)
                    '("diff --git a/a.el b/a.el"
@@ -1074,8 +1074,8 @@
                             (plist-get (cadr (plist-get (car files) :hunks))
                                        :body)))))
 
-(ert-deftest gh-commit-detail-sections-and-full-diff-fold-independently ()
-  (let* ((context (gh-context-from-repository "o/r"))
+(ert-deftest magh-commit-detail-sections-and-full-diff-fold-independently ()
+  (let* ((context (magh-context-from-repository "o/r"))
          (diff (concat
                 "diff --git a/a.el b/a.el\n"
                 "--- a/a.el\n+++ b/a.el\n"
@@ -1103,12 +1103,12 @@
                           (body . "General comment"))))
             (diff . ,diff))))
     (with-temp-buffer
-      (gh-section-mode)
-      (setq gh-buffer-context context
-            gh-buffer-resource-kind 'commit
-            gh-buffer-resource-id "HEAD")
-      (gh-ui--replace
-       (lambda (result) (gh-commit--render-view context result)) data nil)
+      (magh-section-mode)
+      (setq magh-buffer-context context
+            magh-buffer-resource-kind 'commit
+            magh-buffer-resource-id "HEAD")
+      (magh-ui--replace
+       (lambda (result) (magh-commit--render-view context result)) data nil)
       (let* ((top-level (oref magit-root-section children))
              (types (mapcar (lambda (section) (oref section type)) top-level))
              (changed-files-section
@@ -1132,13 +1132,13 @@
                                   (string-match "\n" text hunk-position))))
           (dolist (position (list file-position file-newline))
             (should position)
-            (should (gh-test-font-lock-face-p
+            (should (magh-test-font-lock-face-p
                      text position 'magit-diff-file-heading))
-            (should (gh-test-font-lock-face-p
+            (should (magh-test-font-lock-face-p
                      text position 'magit-diff-file-heading-highlight)))
           (dolist (position (list hunk-position hunk-newline))
             (should position)
-            (should (gh-test-font-lock-face-p
+            (should (magh-test-font-lock-face-p
                      text position 'magit-diff-hunk-heading))))
         (let* ((files (oref changed-files-section children))
                (first-file-hunks (oref (car files) children)))
@@ -1170,11 +1170,11 @@
             (magit-section-show hunk)
             (should-not (oref hunk hidden))))))))
 
-(ert-deftest gh-commit-review-renderer-shows-threads-drafts-and-stale-state ()
-  (let* ((context (gh-context-from-repository "o/r"))
-         (gh-commit--review-drafts (make-hash-table :test #'equal))
-         (current-key (gh-commit--review-key context 7 "HEAD"))
-         (stale-key (gh-commit--review-key context 7 "OLD"))
+(ert-deftest magh-commit-review-renderer-shows-threads-drafts-and-stale-state ()
+  (let* ((context (magh-context-from-repository "o/r"))
+         (magh-commit--review-drafts (make-hash-table :test #'equal))
+         (current-key (magh-commit--review-key context 7 "HEAD"))
+         (stale-key (magh-commit--review-key context 7 "OLD"))
          (result
           `((pr . ((number . 7)
                    (title . "Review me")
@@ -1214,18 +1214,18 @@
     (puthash current-key
              '((:id 1 :path "src/a.el" :line 1 :side "RIGHT"
                 :subject-type "LINE" :body "Local draft"))
-             gh-commit--review-drafts)
+             magh-commit--review-drafts)
     (puthash stale-key
              '((:id 2 :path "src/old.el" :subject-type "FILE"
                 :body "Old draft"))
-             gh-commit--review-drafts)
+             magh-commit--review-drafts)
     (with-temp-buffer
-      (gh-section-mode)
-      (setq gh-buffer-context context
-            gh-buffer-resource-kind 'commit-review
-            gh-buffer-resource-id 7)
-      (gh-ui--replace
-       (lambda (data) (gh-commit--render-review context 7 data)) result nil)
+      (magh-section-mode)
+      (setq magh-buffer-context context
+            magh-buffer-resource-kind 'commit-review
+            magh-buffer-resource-id 7)
+      (magh-ui--replace
+       (lambda (data) (magh-commit--render-review context 7 data)) result nil)
       (setq text (buffer-string))
       (let* ((changed-files
               (seq-find (lambda (section)
@@ -1238,9 +1238,9 @@
                 (string-match (regexp-quote "src/a.el modified") rendered))
                (hunk-position
                 (string-match (regexp-quote "@@ -1 +1 @@") rendered)))
-          (should (gh-test-font-lock-face-p
+          (should (magh-test-font-lock-face-p
                    rendered file-position 'magit-diff-file-heading-highlight))
-          (should (gh-test-font-lock-face-p
+          (should (magh-test-font-lock-face-p
                    rendered hunk-position 'magit-diff-hunk-heading)))
         (should (equal (mapcar (lambda (section) (oref section type)) hunks)
                        '(diff-hunk diff-hunk)))
@@ -1258,36 +1258,36 @@
     (should (string-match-p "Stale drafts (cannot be submitted)" text))
     (should (string-match-p "Old draft" text))))
 
-(ert-deftest gh-pr-review-opens-structured-commit-review-resource ()
-  (let ((context (gh-context-from-repository "o/r")) captured)
-    (cl-letf (((symbol-function 'gh-resource-open)
+(ert-deftest magh-pr-review-opens-structured-commit-review-resource ()
+  (let ((context (magh-context-from-repository "o/r")) captured)
+    (cl-letf (((symbol-function 'magh-resource-open)
                (lambda (resource) (setq captured resource))))
-      (let ((gh-buffer-context context)
-            (gh-pr--view-number 7)
-            (gh-pr--dispatch-resource nil))
-        (gh-pr-review)))
+      (let ((magh-buffer-context context)
+            (magh-pr--view-number 7)
+            (magh-pr--dispatch-resource nil))
+        (magh-pr-review)))
     (should (eq (plist-get captured :kind) 'commit-review))
     (should (= (plist-get captured :number) 7))
     (should (eq (plist-get captured :context) context))))
 
-(ert-deftest gh-commit-review-submit-failure-preserves-local-drafts ()
-  (let* ((context (gh-context-from-repository "o/r"))
-         (gh-commit--review-drafts (make-hash-table :test #'equal))
-         (key (gh-commit--review-key context 7 "HEAD"))
+(ert-deftest magh-commit-review-submit-failure-preserves-local-drafts ()
+  (let* ((context (magh-context-from-repository "o/r"))
+         (magh-commit--review-drafts (make-hash-table :test #'equal))
+         (key (magh-commit--review-key context 7 "HEAD"))
          (draft '(:id 1 :path "src/a.el" :line 1 :side "RIGHT"
                   :subject-type "LINE" :body "Keep me")))
-    (puthash key (list draft) gh-commit--review-drafts)
-    (cl-letf (((symbol-function 'gh-api--pr-review)
+    (puthash key (list draft) magh-commit--review-drafts)
+    (cl-letf (((symbol-function 'magh-api--pr-review)
                (lambda (_context _number _event _body _comments
                         _callback errback &optional _head)
                  (funcall errback
-                          (gh-core--error 'gh-api-error "Review failed")))))
-      (let ((gh-buffer-context context)
-            (gh-commit--review-number 7)
-            (gh-commit--review-head "HEAD"))
-        (should-error (gh-commit-review-submit 'approve "")
+                          (magh-core--error 'magh-api-error "Review failed")))))
+      (let ((magh-buffer-context context)
+            (magh-commit--review-number 7)
+            (magh-commit--review-head "HEAD"))
+        (should-error (magh-commit-review-submit 'approve "")
                       :type 'user-error)))
-    (should (equal (gethash key gh-commit--review-drafts) (list draft)))))
+    (should (equal (gethash key magh-commit--review-drafts) (list draft)))))
 
-(provide 'gh-ui-test)
-;;; gh-ui-test.el ends here
+(provide 'magh-ui-test)
+;;; magh-ui-test.el ends here

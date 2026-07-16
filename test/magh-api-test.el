@@ -1,16 +1,16 @@
-;;; gh-api-test.el --- API contract tests for gh.el -*- lexical-binding: t; -*-
+;;; magh-api-test.el --- API contract tests for magh.el -*- lexical-binding: t; -*-
 
-(require 'gh-test-helper)
-(require 'gh-api)
-(require 'gh-command)
+(require 'magh-test-helper)
+(require 'magh-api)
+(require 'magh-command)
 
-(ert-deftest gh-api-issue-list-keeps-each-cli-argument-separate ()
-  (let ((context (gh-context-from-repository "acme/widgets" "github.com"))
+(ert-deftest magh-api-issue-list-keeps-each-cli-argument-separate ()
+  (let ((context (magh-context-from-repository "acme/widgets" "github.com"))
         captured)
-    (cl-letf (((symbol-function 'gh-client--json-async)
+    (cl-letf (((symbol-function 'magh-client--json-async)
                (lambda (argv _success _error &rest keys)
                  (setq captured (cons argv keys)) 'request)))
-      (gh-api--issue-list
+      (magh-api--issue-list
        context '(:state "open" :labels ("help wanted" "good first issue")
                  :assignee "octo cat" :limit 17)
        #'ignore #'ignore))
@@ -21,25 +21,25 @@
       (should (equal (cadr (member "--repo" argv)) "acme/widgets"))
       (should (equal (cadr (member "--limit" argv)) "17")))))
 
-(ert-deftest gh-api-rest-pagination-and-fields-are-typed ()
+(ert-deftest magh-api-rest-pagination-and-fields-are-typed ()
   (should
    (equal
-    (gh-api--rest-argv "repos/o/r/items" "GET"
+    (magh-api--rest-argv "repos/o/r/items" "GET"
                        '((page . 2) (enabled . t) (name . "two words")) t)
     '("api" "repos/o/r/items" "--method" "GET" "--paginate" "--slurp"
       "-F" "page=2" "-F" "enabled=true" "-f" "name=two words"))))
 
-(ert-deftest gh-api-repo-viewer-fork-uses-owner-affiliation ()
-  (let ((context (gh-context-from-repository "acme/widgets"))
+(ert-deftest magh-api-repo-viewer-fork-uses-owner-affiliation ()
+  (let ((context (magh-context-from-repository "acme/widgets"))
         captured result)
-    (cl-letf (((symbol-function 'gh-client--json-async)
+    (cl-letf (((symbol-function 'magh-client--json-async)
                (lambda (argv success _error &rest keys)
                  (setq captured (cons argv keys))
                  (funcall success
                           '((data . ((repository .
                                      ((forks . ((totalCount . 1)))))))))
                  'request)))
-      (gh-api--repo-viewer-forked-p
+      (magh-api--repo-viewer-forked-p
        context (lambda (value) (setq result value)) #'ignore t))
     (should result)
     (should (member "owner=acme" (car captured)))
@@ -49,65 +49,65 @@
              (cadr (member "-f" (car captured)))))
     (should (plist-get (cdr captured) :force))))
 
-(ert-deftest gh-api-paginated-content-contracts-are-normalized-once ()
+(ert-deftest magh-api-paginated-content-contracts-are-normalized-once ()
   (should
-   (equal (gh-api--flatten-pages
+   (equal (magh-api--flatten-pages
            '((((id . 1)) ((id . 2))) (((id . 3)))))
           '(((id . 1)) ((id . 2)) ((id . 3)))))
   (should
-   (equal (gh-api--decode-content
+   (equal (magh-api--decode-content
            '((encoding . "base64") (content . "aGVs\r\nbG8=")))
           "hello"))
   (should
-   (equal (gh-api--decode-content
+   (equal (magh-api--decode-content
            '((encoding . "utf-8") (content . "plain text")))
           "plain text")))
 
-(ert-deftest gh-api-search-arguments-share-one-builder ()
+(ert-deftest magh-api-search-arguments-share-one-builder ()
   (should
    (equal
-    (gh-api--search-argv
+    (magh-api--search-argv
      'repos "two words"
      '(:owner "octo cat" :state "open"))
     (append
      '("search" "repos" "two words" "--limit")
-     (list (number-to-string gh-list-limit)
-           "--json" (alist-get 'repos gh-api--search-fields)
+     (list (number-to-string magh-list-limit)
+           "--json" (alist-get 'repos magh-api--search-fields)
            "--owner" "octo cat" "--state" "open")))))
 
-(ert-deftest gh-api-release-body-uses-stdin-not-a-shell-or-temporary-file ()
-  (let ((context (gh-context-from-repository "o/r")) captured)
-    (cl-letf (((symbol-function 'gh-client--mutate-text)
+(ert-deftest magh-api-release-body-uses-stdin-not-a-shell-or-temporary-file ()
+  (let ((context (magh-context-from-repository "o/r")) captured)
+    (cl-letf (((symbol-function 'magh-client--mutate-text)
                (lambda (argv _success _error &rest keys)
                  (setq captured (cons argv keys)) 'request)))
-      (gh-api--release-create
+      (magh-api--release-create
        context '(:tag "v1.0" :title "A release" :body "line 1\n$HOME `x`")
        #'ignore #'ignore))
     (should (member "--notes-file" (car captured)))
     (should (equal (plist-get (cdr captured) :stdin)
                    "line 1\n$HOME `x`"))))
 
-(ert-deftest gh-api-valid-message-field-is-not-mistaken-for-an-error ()
-  (should-not (gh-api--api-errors '((message . "ordinary commit message")
+(ert-deftest magh-api-valid-message-field-is-not-mistaken-for-an-error ()
+  (should-not (magh-api--api-errors '((message . "ordinary commit message")
                                     (sha . "abc"))))
-  (should (gh-api--api-errors '((message . "Not Found")
+  (should (magh-api--api-errors '((message . "Not Found")
                                 (status . "404")))))
 
-(ert-deftest gh-api-json-mutation-surfaces-graphql-errors ()
+(ert-deftest magh-api-json-mutation-surfaces-graphql-errors ()
   (let (success failure)
-    (cl-letf (((symbol-function 'gh-client--mutate-json)
+    (cl-letf (((symbol-function 'magh-client--mutate-json)
                (lambda (_argv callback _errback &rest _keys)
                  (funcall callback
                           '((errors . (((message . "Mutation rejected")))))))))
-      (gh-api--mutate-json
-       (gh-context-create) '("api" "graphql") nil
+      (magh-api--mutate-json
+       (magh-context-create) '("api" "graphql") nil
        (lambda (_) (setq success t)) (lambda (error) (setq failure error))))
     (should-not success)
-    (should (eq (car failure) 'gh-api-error))))
+    (should (eq (car failure) 'magh-api-error))))
 
-(ert-deftest gh-api-rest-release-normalizes-public-contract ()
+(ert-deftest magh-api-rest-release-normalizes-public-contract ()
   (let ((release
-         (gh-api--normalize-rest-release
+         (magh-api--normalize-rest-release
           '((id . 7) (tag_name . "v1") (target_commitish . "main")
             (draft . nil) (prerelease . t) (html_url . "https://example/r")
             (assets . (((id . 8) (name . "a.zip") (download_count . 3)
@@ -117,81 +117,81 @@
     (should (= (alist-get
                 'downloadCount (car (alist-get 'assets release))) 3))))
 
-(ert-deftest gh-api-project-completion-uses-owner-and-json-output ()
-  (let ((context (gh-context-from-repository "acme/widgets" "github.com"))
+(ert-deftest magh-api-project-completion-uses-owner-and-json-output ()
+  (let ((context (magh-context-from-repository "acme/widgets" "github.com"))
         captured)
-    (cl-letf (((symbol-function 'gh-client--json-async)
+    (cl-letf (((symbol-function 'magh-client--json-async)
                (lambda (argv _success _error &rest keys)
                  (setq captured (cons argv keys)) 'request)))
-      (gh-api--project-list context #'ignore #'ignore))
+      (magh-api--project-list context #'ignore #'ignore))
     (should (equal (seq-take (car captured) 4)
                    '("project" "list" "--owner" "acme")))
     (should (member "--format" (car captured)))
     (should (equal (cadr (member "--format" (car captured))) "json"))))
 
-(ert-deftest gh-api-cli-json-field-contracts-distinguish-list-and-view ()
-  (should (memq 'startedAt gh-api--run-fields))
-  (should-not (memq 'startedTime gh-api--run-fields))
-  (should (memq 'isLatest gh-api--release-list-fields))
-  (should-not (memq 'assets gh-api--release-list-fields))
-  (should (memq 'assets gh-api--release-view-fields))
-  (should-not (memq 'isLatest gh-api--release-view-fields)))
+(ert-deftest magh-api-cli-json-field-contracts-distinguish-list-and-view ()
+  (should (memq 'startedAt magh-api--run-fields))
+  (should-not (memq 'startedTime magh-api--run-fields))
+  (should (memq 'isLatest magh-api--release-list-fields))
+  (should-not (memq 'assets magh-api--release-list-fields))
+  (should (memq 'assets magh-api--release-view-fields))
+  (should-not (memq 'isLatest magh-api--release-view-fields)))
 
-(ert-deftest gh-api-explicit-json-false-never-enables-cli-switches ()
-  (let ((context (gh-context-from-repository "acme/widgets")) captured)
-    (cl-letf (((symbol-function 'gh-client--mutate-text)
+(ert-deftest magh-api-explicit-json-false-never-enables-cli-switches ()
+  (let ((context (magh-context-from-repository "acme/widgets")) captured)
+    (cl-letf (((symbol-function 'magh-client--mutate-text)
                (lambda (argv _success _error &rest keys)
                  (setq captured (cons argv keys)) 'request)))
-      (gh-api--repo-create
+      (magh-api--repo-create
        context '(:name "new" :public t :push :json-false :clone :json-false)
        #'ignore #'ignore)
       (should (member "--public" (car captured)))
       (should-not (member "--push" (car captured)))
       (should-not (member "--clone" (car captured)))
-      (gh-api--pr-create
+      (magh-api--pr-create
        context '(:title "PR" :base "main" :head "topic"
                  :draft :json-false :body "")
        #'ignore #'ignore)
       (should-not (member "--draft" (car captured)))
-      (gh-api--release-edit
+      (magh-api--release-edit
        context "v1" '(:draft :json-false :prerelease :json-false)
        #'ignore #'ignore)
       (should (member "--draft=false" (car captured)))
       (should (member "--prerelease=false" (car captured)))
-      (gh-api--repo-edit
+      (magh-api--repo-edit
        context '(:issues nil :wiki t) #'ignore #'ignore)
       (should (member "--enable-issues=false" (car captured)))
       (should (member "--enable-wiki=true" (car captured))))))
 
-(ert-deftest gh-api-generic-output-preserves-json-false ()
-  (let ((context (gh-context-create :host "github.com")) captured rendered)
-    (cl-letf (((symbol-function 'gh-client--json-async)
+(ert-deftest magh-api-generic-output-preserves-json-false ()
+  (let ((context (magh-context-create :host "github.com")) captured rendered)
+    (cl-letf (((symbol-function 'magh-client--json-async)
                (lambda (_argv success _error &rest keys)
                  (setq captured keys)
                  (funcall success '((enabled . :json-false) (missing)))
                  'request)))
-      (gh-api--generic-request
+      (magh-api--generic-request
        context "example" "GET" nil nil
-       (lambda (data) (setq rendered (gh-command--json-string data))) #'ignore))
+       (lambda (data) (setq rendered (magh-command--json-string data))) #'ignore))
     (should (eq (plist-get captured :json-false-object) :json-false))
     (should (string-match-p "\\\"enabled\\\"[[:space:]]*:[[:space:]]*false"
                             rendered))
     (should (string-match-p "\\\"missing\\\"[[:space:]]*:[[:space:]]*null"
                             rendered))))
 
-(ert-deftest gh-api-review-uses-add-thread-for-file-comments ()
-  (let ((context (gh-context-from-repository "acme/widgets"))
+(ert-deftest magh-api-review-uses-add-thread-for-file-comments ()
+  (let ((context (magh-context-from-repository "acme/widgets"))
         reads mutations finished failure)
-    (cl-letf (((symbol-function 'gh-api--pr-get)
+    (cl-letf (((symbol-function 'magh-api--pr-get)
                (lambda (_context _number callback _errback &optional _force)
                  (funcall callback '((id . "PR_node"))) 'pr-request))
-              ((symbol-function 'gh-client--json-async)
+              ((symbol-function 'magh-client--json-async)
                (lambda (argv success _error &rest keys)
                  (push (cons argv keys) reads)
                  (funcall success
                           '((data . ((node . ((reviews . ((nodes)))))))))
                  'read-request))
-              ((symbol-function 'gh-client--mutate-json)
+              ((symbol-function 'magh-client--mutate-json)
                (lambda (argv success _error &rest keys)
                  (let* ((payload (json-parse-string
                                   (plist-get keys :stdin)
@@ -210,7 +210,7 @@
                      (t '((data . ((submitPullRequestReview
                                    . ((pullRequestReview . ((id . "REVIEW_node")))))))))))
                  'mutation-request))))
-      (gh-api--pr-review
+      (magh-api--pr-review
        context 12 'approve "Looks good"
        '((:path "src/a.el" :subject-type "FILE" :body "Whole file"))
        (lambda (_) (setq finished t)) (lambda (error) (setq failure error))))
@@ -235,22 +235,22 @@
            (payload (json-parse-string
                      (plist-get (cdr submit-call) :stdin)
                      :object-type 'alist :array-type 'list))
-           (input (gh-api--json-at payload 'variables 'input)))
+           (input (magh-api--json-at payload 'variables 'input)))
       (should (equal (alist-get 'event input) "APPROVE")))))
 
-(ert-deftest gh-api-review-rolls-back-a-new-pending-review-on-thread-error ()
-  (let ((context (gh-context-from-repository "acme/widgets"))
-        (thread-error (gh-core--error 'gh-api-error "Thread rejected"))
+(ert-deftest magh-api-review-rolls-back-a-new-pending-review-on-thread-error ()
+  (let ((context (magh-context-from-repository "acme/widgets"))
+        (thread-error (magh-core--error 'magh-api-error "Thread rejected"))
         queries failure finished)
-    (cl-letf (((symbol-function 'gh-api--pr-get)
+    (cl-letf (((symbol-function 'magh-api--pr-get)
                (lambda (_context _number callback _errback &optional _force)
                  (funcall callback '((id . "PR_node"))) 'pr-request))
-              ((symbol-function 'gh-client--json-async)
+              ((symbol-function 'magh-client--json-async)
                (lambda (_argv success _error &rest _keys)
                  (funcall success
                           '((data . ((node . ((reviews . ((nodes)))))))))
                  'read-request))
-              ((symbol-function 'gh-client--mutate-json)
+              ((symbol-function 'magh-client--mutate-json)
                (lambda (_argv success error &rest keys)
                  (let* ((payload (json-parse-string
                                   (plist-get keys :stdin)
@@ -269,7 +269,7 @@
                      (funcall success '((data . ((deletePullRequestReview))))))
                     (t (ert-fail (format "Unexpected mutation: %s" query))))
                  'mutation-request))))
-      (gh-api--pr-review
+      (magh-api--pr-review
        context 12 'comment "Summary"
        '((:path "src/a.el" :line 3 :side "RIGHT"
           :subject-type "LINE" :body "Needs work"))
@@ -285,7 +285,7 @@
                             (string-match-p "submitPullRequestReview" query))
                           queries))))
 
-(ert-deftest gh-api-review-thread-pages-flatten-slurped-data ()
+(ert-deftest magh-api-review-thread-pages-flatten-slurped-data ()
   (let* ((data
           (json-parse-string
            (concat
@@ -294,11 +294,11 @@
             "{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":"
             "{\"nodes\":[{\"id\":\"B\"}]}}}}}]")
            :object-type 'alist :array-type 'list))
-         (nodes (gh-api--pr-review-thread-pages data)))
+         (nodes (magh-api--pr-review-thread-pages data)))
     (should (equal (mapcar (lambda (node) (alist-get 'id node)) nodes)
                    '("A" "B")))))
 
-(ert-deftest gh-api-review-threads-group-replies-and-metadata ()
+(ert-deftest magh-api-review-threads-group-replies-and-metadata ()
   (let* ((root '((id . 10) (path . "src/a.el") (line . 4)
                  (side . "RIGHT") (body . "Root")))
          (reply-1 '((id . 11) (in_reply_to_id . 10) (body . "First")))
@@ -310,7 +310,7 @@
              (viewerCanReply . t) (viewerCanResolve . :json-false)
              (viewerCanUnresolve . t)
              (comments . ((nodes . (((databaseId . 10)))))))))
-         (threads (gh-api--pr-review-normalize-threads
+         (threads (magh-api--pr-review-normalize-threads
                    (list root reply-1 reply-2) metadata))
          (thread (car threads)))
     (should (= (length threads) 1))
@@ -323,9 +323,9 @@
                            (alist-get 'comments thread))
                    '(10 11 12)))))
 
-(ert-deftest gh-api-review-threads-rest-fallback-remains-replyable ()
+(ert-deftest magh-api-review-threads-rest-fallback-remains-replyable ()
   (let* ((thread
-          (car (gh-api--pr-review-normalize-threads
+          (car (magh-api--pr-review-normalize-threads
                 '(((id . 10) (path . "src/a.el") (line . 4)
                    (side . "RIGHT") (body . "Root")))
                 nil))))
@@ -333,21 +333,21 @@
     (should (alist-get 'viewer_can_reply thread))
     (should-not (alist-get 'viewer_can_resolve thread))))
 
-(ert-deftest gh-api-review-reply-uses-top-level-comment-endpoint ()
-  (let ((context (gh-context-from-repository "acme/widgets")) captured)
-    (cl-letf (((symbol-function 'gh-client--mutate-json)
+(ert-deftest magh-api-review-reply-uses-top-level-comment-endpoint ()
+  (let ((context (magh-context-from-repository "acme/widgets")) captured)
+    (cl-letf (((symbol-function 'magh-client--mutate-json)
                (lambda (argv success _error &rest keys)
                  (setq captured (cons argv keys))
                  (funcall success '((id . 12)))
                  'request)))
-      (gh-api--pr-review-reply context 7 10 "Reply body" #'ignore #'ignore))
+      (magh-api--pr-review-reply context 7 10 "Reply body" #'ignore #'ignore))
     (should (member "repos/acme/widgets/pulls/7/comments/10/replies"
                     (car captured)))
     (should (member "body=Reply body" (car captured)))))
 
-(ert-deftest gh-api-review-thread-resolution-carries-thread-id ()
-  (let ((context (gh-context-from-repository "acme/widgets")) payload)
-    (cl-letf (((symbol-function 'gh-client--mutate-json)
+(ert-deftest magh-api-review-thread-resolution-carries-thread-id ()
+  (let ((context (magh-context-from-repository "acme/widgets")) payload)
+    (cl-letf (((symbol-function 'magh-client--mutate-json)
                (lambda (_argv success _error &rest keys)
                  (setq payload
                        (json-parse-string
@@ -355,30 +355,30 @@
                         :object-type 'alist :array-type 'list))
                  (funcall success '((data . ((resolveReviewThread)))))
                  'request)))
-      (gh-api--pr-review-thread-resolved
+      (magh-api--pr-review-thread-resolved
        context 7 "THREAD" t #'ignore #'ignore))
     (should (string-match-p "resolveReviewThread"
                             (alist-get 'query payload)))
-    (should (equal (gh-api--json-at payload 'variables 'input 'threadId)
+    (should (equal (magh-api--json-at payload 'variables 'input 'threadId)
                    "THREAD"))))
 
-(ert-deftest gh-api-review-binds-new-pending-review-to-head ()
-  (let ((context (gh-context-from-repository "acme/widgets")) create-input done)
-    (cl-letf (((symbol-function 'gh-api--pr-get)
+(ert-deftest magh-api-review-binds-new-pending-review-to-head ()
+  (let ((context (magh-context-from-repository "acme/widgets")) create-input done)
+    (cl-letf (((symbol-function 'magh-api--pr-get)
                (lambda (_context _number callback _errback &optional _force)
                  (funcall callback '((id . "PR"))) 'request))
-              ((symbol-function 'gh-client--json-async)
+              ((symbol-function 'magh-client--json-async)
                (lambda (_argv success _error &rest _keys)
                  (funcall success
                           '((data . ((node . ((reviews . ((nodes)))))))))
                  'request))
-              ((symbol-function 'gh-client--mutate-json)
+              ((symbol-function 'magh-client--mutate-json)
                (lambda (_argv success _error &rest keys)
                  (let* ((payload (json-parse-string
                                   (plist-get keys :stdin)
                                   :object-type 'alist :array-type 'list))
                         (query (alist-get 'query payload))
-                        (input (gh-api--json-at payload 'variables 'input)))
+                        (input (magh-api--json-at payload 'variables 'input)))
                    (if (string-match-p "addPullRequestReview(input" query)
                        (progn
                          (setq create-input input)
@@ -392,25 +392,25 @@
                           success '((data . ((submitPullRequestReview)))))
                        (ert-fail (format "Unexpected mutation: %s" query)))))
                  'request)))
-      (gh-api--pr-review context 7 'approve "" nil
+      (magh-api--pr-review context 7 'approve "" nil
                          (lambda (_) (setq done t)) #'ignore "HEAD"))
     (should done)
     (should (equal (alist-get 'pullRequestId create-input) "PR"))
     (should (equal (alist-get 'commitOID create-input) "HEAD"))))
 
-(ert-deftest gh-api-commit-inline-comment-uses-diff-position ()
-  (let ((context (gh-context-from-repository "acme/widgets")) captured)
-    (cl-letf (((symbol-function 'gh-client--mutate-json)
+(ert-deftest magh-api-commit-inline-comment-uses-diff-position ()
+  (let ((context (magh-context-from-repository "acme/widgets")) captured)
+    (cl-letf (((symbol-function 'magh-client--mutate-json)
                (lambda (argv success _error &rest keys)
                  (setq captured (cons argv keys))
                  (funcall success '((id . 1)))
                  'request)))
-      (gh-api--commit-comment
+      (magh-api--commit-comment
        context "HEAD" "Inline body" "src/a.el" 4 #'ignore #'ignore))
     (should (member "path=src/a.el" (car captured)))
     (should (member "position=4" (car captured)))
     (should-not (seq-some (lambda (arg) (string-prefix-p "line=" arg))
                           (car captured)))))
 
-(provide 'gh-api-test)
-;;; gh-api-test.el ends here
+(provide 'magh-api-test)
+;;; magh-api-test.el ends here

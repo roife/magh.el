@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic GitHub CLI stand-in used by gh.el's offline tests."""
+"""Deterministic GitHub CLI stand-in used by magh.el's offline tests."""
 
 import json
 import os
