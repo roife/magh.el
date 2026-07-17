@@ -265,6 +265,12 @@ Do not add space before the first child of the current parent."
                              magh-buffer-resource-kind magh-buffer-context
                              :id magh-buffer-resource-id)))
       (funcall renderer data))
+    ;; `magit-refresh-buffer' completes section insertion by showing the root.
+    ;; Our pages refresh asynchronously and bypass that function, so do the
+    ;; equivalent here.  Besides applying the initial visibility recursively,
+    ;; this also installs the fringe or margin visibility indicators.
+    (let ((magit-section-cache-visibility nil))
+      (magit-section-show magit-root-section))
     (goto-char (point-min))
     (when state (magh-ui--restore-state state))))
 
@@ -297,20 +303,16 @@ With FORCE non-nil (interactively, a prefix argument), bypass completed cache."
   (cl-incf magh-ui--generation)
   (let ((generation magh-ui--generation)
         (state (magh-ui--capture-state)))
-    (setq header-line-format
-          (propertize " Loading GitHub data…" 'font-lock-face 'magh-loading))
     (unless magh-ui--data (magh-ui--render-loading))
     (funcall
      magh-buffer-refresh-function
      (lambda (data)
        (when (= generation magh-ui--generation)
-         (setq magh-ui--data data
-               header-line-format nil)
+         (setq magh-ui--data data)
          (magh-ui--replace magh-buffer-render-function data state)
          (run-hooks 'magh-post-refresh-hook)))
      (lambda (error)
        (when (= generation magh-ui--generation)
-         (setq header-line-format nil)
          (magh-ui--render-error error state)
          (run-hooks 'magh-post-refresh-hook)))
      force)))
@@ -489,7 +491,7 @@ must use `font-lock-face' to survive just-in-time refontification."
     (unwind-protect
         (when (and (buffer-live-p target) (overlay-buffer overlay)
                    (null (plist-get status :error)))
-          (let* ((start (marker-position url-http-end-of-headers))
+          (let* ((start (1+ (marker-position url-http-end-of-headers)))
                  (size (- (point-max) start)))
             (when (<= size magh-view-inline-image-max-bytes)
               (let* ((bytes (buffer-substring-no-properties start (point-max)))
@@ -510,7 +512,7 @@ must use `font-lock-face' to survive just-in-time refontification."
     (save-excursion
       (goto-char start)
       (while (re-search-forward
-              "!\\[\\([^]\n]*\\)\\](\\(https?://[^) \\t\\n]+\\))" end t)
+              "!\\[\\([^]\n]*\\)\\](\\(https?://[^) \t\n]+\\))" end t)
         (let* ((alt (match-string-no-properties 1))
                (url (match-string-no-properties 2))
                (overlay (make-overlay (match-beginning 0) (match-end 0)

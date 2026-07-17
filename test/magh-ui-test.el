@@ -789,6 +789,30 @@
             (should-not (string-match-p "value=old" (buffer-string))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest magh-ui-initial-render-installs-section-visibility-indicators ()
+  (let ((magit-section-visibility-indicators
+         '((?> . ?v) (?> . ?v)))
+        (magh-section-initial-visibility-alist '((t . show))))
+    (with-temp-buffer
+      (magh-section-mode)
+      (setq magh-buffer-context (magh-context-from-repository "o/r")
+            magh-buffer-resource-kind 'repository
+            magh-buffer-resource-id "o/r")
+      (magh-ui--replace
+       (lambda (_data)
+         (magh-ui--section (items 'items nil nil)
+           "Items"
+           (insert "Body\n")))
+       nil nil)
+      (let* ((section (car (oref magit-root-section children)))
+             (indicator
+              (seq-find (lambda (overlay)
+                          (eq (overlay-get overlay 'magit-vis-indicator)
+                              'margin))
+                        (overlays-at (oref section start)))))
+        (should indicator)
+        (should (overlay-get indicator 'before-string))))))
+
 (ert-deftest magh-ui-shared-context-prefers-explicit-context ()
   (let ((page (magh-context-from-repository "page/repo"))
         (explicit (magh-context-from-repository "explicit/repo")))
@@ -868,6 +892,53 @@
       (should (equal (buffer-substring-no-properties (point-min) (point-max))
                      "First\nSecond\nThird\n"))
       (should-not (string-match-p "\r" (buffer-string))))))
+
+(ert-deftest magh-ui-markdown-loads-standard-https-images ()
+  (let ((magh-view-inline-images t)
+        requested-url)
+    (with-temp-buffer
+      (insert "![image](https://github.com/user-attachments/assets/example)\n")
+      (cl-letf (((symbol-function 'display-images-p) (lambda (&optional _) t))
+                ((symbol-function 'url-retrieve)
+                 (lambda (url _callback _cbargs &optional _silent _cookies)
+                   (setq requested-url url))))
+        (magh-ui--load-inline-images (point-min) (point-max)))
+      (goto-char (point-min))
+      (let ((overlay
+             (seq-find (lambda (item)
+                         (overlay-get item 'magh-image-url))
+                       (overlays-at (point)))))
+        (should (equal requested-url
+                       "https://github.com/user-attachments/assets/example"))
+        (should overlay)
+        (should (equal (overlay-get overlay 'magh-image-url) requested-url))
+        (should (eq (lookup-key (overlay-get overlay 'keymap) (kbd "RET"))
+                    #'magh-ui-open-image-at-point))))))
+
+(ert-deftest magh-ui-image-response-skips-header-separator-newline ()
+  (let ((target (generate-new-buffer " *magh-image-target*"))
+        (response (generate-new-buffer " *magh-image-response*"))
+        overlay image-bytes)
+    (unwind-protect
+        (progn
+          (with-current-buffer target
+            (insert "placeholder")
+            (setq overlay (make-overlay (point-min) (point-max))))
+          (with-current-buffer response
+            (set-buffer-multibyte nil)
+            (insert "HTTP/1.1 200 OK\nContent-Type: image/png\n\n")
+            (let ((url-http-end-of-headers (copy-marker (1- (point)))))
+              (insert (unibyte-string #x89 ?P ?N ?G))
+              (cl-letf (((symbol-function 'create-image)
+                         (lambda (data &rest _)
+                           (setq image-bytes data)
+                           '(image :type png))))
+                (magh-ui--image-finished nil target overlay
+                                         "https://example.test/image.png"))))
+          (should (equal image-bytes (unibyte-string #x89 ?P ?N ?G)))
+          (should (equal (overlay-get overlay 'display) '(image :type png))))
+      (when (buffer-live-p response) (kill-buffer response))
+      (when (buffer-live-p target) (kill-buffer target)))))
 
 (ert-deftest magh-ui-resource-renderers-accept-representative-data ()
   (let* ((context (magh-context-from-repository "o/r"))
