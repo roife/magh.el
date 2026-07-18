@@ -424,6 +424,9 @@
            (cons 'comparison
                  (lambda (ok fail)
                    (magh-api--compare context base head ok fail force)))
+           (cons 'reviews
+                 (lambda (ok fail)
+                   (magh-api--pr-reviews context number ok fail force)))
            (cons 'threads
                  (lambda (ok fail)
                    (magh-api--pr-review-threads
@@ -520,17 +523,19 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
 
 (defun magh-commit--review-thread-resource (context number head thread)
   "Create a structured review resource from THREAD."
-  (magh-resource-create
-   'review-thread context
-   :number number :sha head :path (alist-get 'path thread)
-   :line (alist-get 'line thread) :side (alist-get 'side thread)
-   :thread-id (alist-get 'id thread) :root-id (alist-get 'root_id thread)
-   :resolved (alist-get 'is_resolved thread)
-   :outdated (alist-get 'is_outdated thread)
-   :can-reply (alist-get 'viewer_can_reply thread)
-   :can-resolve (alist-get 'viewer_can_resolve thread)
-   :can-unresolve (alist-get 'viewer_can_unresolve thread)
-   :data thread))
+  (let ((first (car (alist-get 'comments thread))))
+    (magh-resource-create
+     'review-thread context
+     :number number :sha head :path (alist-get 'path thread)
+     :line (alist-get 'line thread) :side (alist-get 'side thread)
+     :thread-id (alist-get 'id thread) :root-id (alist-get 'root_id thread)
+     :review-id (alist-get 'pull_request_review_id first)
+     :resolved (alist-get 'is_resolved thread)
+     :outdated (alist-get 'is_outdated thread)
+     :can-reply (alist-get 'viewer_can_reply thread)
+     :can-resolve (alist-get 'viewer_can_resolve thread)
+     :can-unresolve (alist-get 'viewer_can_unresolve thread)
+     :data thread)))
 
 (defun magh-commit--draft-resource (context number head key draft &optional stale)
   "Create a review draft resource for DRAFT stored below KEY."
@@ -703,33 +708,145 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
               (magh-commit--insert-review-draft
                context number head draft-key draft))))))))
 
-(defun magh-commit--insert-review-summaries (context reviews)
-  "Insert submitted Pull Request REVIEWS."
+(defun magh-commit--review-targets (review threads)
+  "Return inline comment targets in THREADS belonging to REVIEW."
+  (let ((review-id (alist-get 'id review)) targets)
+    (dolist (thread threads)
+      (let ((first (car (alist-get 'comments thread))))
+        (dolist (comment (alist-get 'comments thread))
+          (when (equal (alist-get 'pull_request_review_id comment) review-id)
+            (push (list :path (alist-get 'path thread)
+                        :line (alist-get 'line thread)
+                        :thread-id (alist-get 'id thread)
+                        :root-id (alist-get 'root_id thread)
+                        :comment-id (alist-get 'id comment)
+                        :author (magh-core--name (alist-get 'user comment))
+                        :reply (not (eq comment first)))
+                  targets)))))
+    (nreverse targets)))
+
+(defun magh-commit--insert-review-target-link
+    (context number head review-id target)
+  "Insert one linked review TARGET below REVIEW-ID."
+  (let* ((path (plist-get target :path))
+         (line (plist-get target :line))
+         (comment-id (plist-get target :comment-id))
+         (resource
+          (magh-resource-create
+           'review-summary context :number number :sha head
+           :review-id review-id :targets (list target))))
+    (magh-ui--section (review-link (cons review-id comment-id) resource nil)
+      (magh-ui--row
+       (concat "  "
+               (magh-ui--styled
+                (if line (format "%s:%s" path line) path) 'magh-file))
+       (magh-ui--styled (plist-get target :author) 'magh-author)
+       (magh-ui--styled (format "#%s" comment-id) 'magh-resource-number)))))
+
+(defun magh-commit--section-resource (section)
+  "Return the structured resource stored on SECTION, if any."
+  (let ((value (oref section value)))
+    (and (magh-section-value-p value)
+         (magh-section-value-resource value))))
+
+(defun magh-commit--review-target-section-p (section target)
+  "Return non-nil when SECTION represents review TARGET."
+  (let* ((value (oref section value))
+         (key (and (magh-section-value-p value)
+                   (magh-section-value-key value)))
+         (resource (magh-commit--section-resource section)))
+    (if (plist-get target :reply)
+        (and (eq (oref section type) 'comment)
+             (equal key (plist-get target :comment-id)))
+      (and (eq (oref section type) 'inline-comment)
+           (eq (plist-get resource :kind) 'review-thread)
+           (equal (plist-get resource :root-id)
+                  (plist-get target :root-id))))))
+
+(defun magh-commit--materialize-review-target (section target)
+  "Expand SECTION as needed and return the section for review TARGET."
+  (magit-section-show section)
+  (or (and (magh-commit--review-target-section-p section target) section)
+      (cl-loop for child in (oref section children)
+               thereis (magh-commit--materialize-review-target child target))))
+
+(defun magh-commit--goto-review-target (resource)
+  "Jump from linked review RESOURCE to its inline comment."
+  (unless (and (eq magh-buffer-resource-kind 'commit-review)
+               (equal magh-buffer-resource-id (plist-get resource :number)))
+    (user-error "Review links can only be followed from their Review page"))
+  (let* ((target (car (plist-get resource :targets)))
+         (changed-files
+          (seq-find (lambda (section)
+                      (eq (oref section type) 'changed-files))
+                    (oref magit-root-section children))))
+    (unless (and target changed-files)
+      (user-error "Review has no linked inline comment"))
+    (magit-section-show changed-files)
+    (let* ((file
+            (seq-find
+             (lambda (section)
+               (equal (plist-get (magh-commit--section-resource section) :path)
+                      (plist-get target :path)))
+             (oref changed-files children)))
+           (target-section
+            (and file (magh-commit--materialize-review-target file target))))
+      (unless target-section
+        (user-error "Linked review comment is not present in this diff"))
+      (goto-char (oref target-section start))
+      (when-let* ((window (get-buffer-window (current-buffer) t)))
+        (set-window-point window (point))
+        (with-selected-window window (recenter)))
+      (when (> (length (plist-get resource :targets)) 1)
+        (message "Showing first of %d linked comments"
+                 (length (plist-get resource :targets)))))))
+
+(defun magh-commit--insert-review-summaries
+    (context number head reviews threads)
+  "Insert submitted REVIEWS and links to their inline comments in THREADS."
   (magh-ui--section (reviews 'reviews nil nil)
     (format "Reviews (%d)" (length reviews))
     (dolist (review reviews)
-      (let ((id (or (alist-get 'id review)
-                    (format "%s:%s"
-                            (magh-core--name (alist-get 'author review))
-                            (alist-get 'submittedAt review)))))
-        (magh-ui--section (review id nil nil)
+      (let* ((id (or (alist-get 'id review)
+                     (format "%s:%s"
+                             (magh-core--name
+                              (or (alist-get 'author review)
+                                  (alist-get 'user review)))
+                             (or (alist-get 'submittedAt review)
+                                 (alist-get 'submitted_at review)))))
+             (author (or (alist-get 'author review)
+                         (alist-get 'user review)))
+             (submitted (or (alist-get 'submittedAt review)
+                            (alist-get 'submitted_at review)))
+             (targets (magh-commit--review-targets review threads))
+             (body (or (alist-get 'body review) ""))
+             (has-body (not (string-empty-p (string-trim body)))))
+        (magh-ui--section (review id nil (or has-body targets))
           (magh-ui--row
            (magh-ui--styled
             (or (alist-get 'state review) "COMMENTED")
             (magh-core--state-face (alist-get 'state review)))
            "by"
-           (magh-ui--styled (magh-core--name (alist-get 'author review))
-                          'magh-author)
-           (magh-ui--styled (magh-core--date (alist-get 'submittedAt review))
-                          'magh-date))
-          (unless (string-empty-p (or (alist-get 'body review) ""))
-            (magh-ui--insert-markdown (alist-get 'body review) context)))))))
+           (magh-ui--styled (magh-core--name author) 'magh-author)
+           (magh-ui--styled (magh-core--date submitted) 'magh-date)
+           (when targets
+             (magh-ui--styled
+              (format "(%d linked comment%s)"
+                      (length targets) (if (= (length targets) 1) "" "s"))
+              'magh-permission)))
+          (when has-body
+            (magh-ui--insert-markdown body context)
+            (when targets (insert "\n")))
+          (dolist (target targets)
+            (magh-commit--insert-review-target-link
+             context number head id target)))))))
 
 (defun magh-commit--render-review (context number result)
   "Render Pull Request NUMBER review RESULT using the Commit page."
   (let* ((pr (alist-get 'pr result))
          (commit (alist-get 'commit result))
          (comparison (alist-get 'comparison result))
+         (reviews (or (alist-get 'reviews result) (alist-get 'reviews pr)))
          (threads (alist-get 'threads result))
          (head (alist-get 'headRefOid pr))
          (base (alist-get 'baseRefOid pr))
@@ -774,7 +891,8 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
                        (length stale))
                'font-lock-face 'magh-error)))
     (insert "\n")
-    (magh-commit--insert-review-summaries context (alist-get 'reviews pr))
+    (magh-commit--insert-review-summaries
+     context number head reviews threads)
     (magh-ui--section (changed-files 'changed-files nil nil)
       (format "Changed files (%d) · Local drafts (%d)"
               (length files) (length drafts))
@@ -1108,6 +1226,10 @@ anchored to its final selected line."
  :open (lambda (resource)
          (magh-commit-review (plist-get resource :number)
                            (plist-get resource :context))))
+
+(magh-candidate-register
+ 'review-summary
+ :open #'magh-commit--goto-review-target)
 
 (magh-candidate-register 'commit-more :open (lambda (_resource)
                                             (magh-commit-load-more)))
