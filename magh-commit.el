@@ -631,6 +631,11 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
           (seq-filter (lambda (draft)
                         (equal (plist-get draft :path) path))
                       drafts))
+         (comment-count
+          (seq-reduce
+           (lambda (count thread)
+             (+ count (length (alist-get 'comments thread))))
+           file-threads 0))
          inserted-threads inserted-drafts)
     (magh-ui--section (file path file-resource nil)
       (magh-commit--diff-file-heading
@@ -640,7 +645,12 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
         (magh-ui--styled (format "+%s" (or (alist-get 'additions file) 0))
                        'magh-added)
         (magh-ui--styled (format "-%s" (or (alist-get 'deletions file) 0))
-                       'magh-removed)))
+                       'magh-removed)
+        (when (> comment-count 0)
+          (magh-ui--styled
+           (format "%d comment%s"
+                   comment-count (if (= comment-count 1) "" "s"))
+           'magh-permission))))
       (dolist (thread file-threads)
         (when (equal (upcase (or (alist-get 'subject_type thread) "LINE"))
                      "FILE")

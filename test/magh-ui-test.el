@@ -1322,7 +1322,12 @@
                             (deletions . 1)
                             (patch . ,(concat
                                        "@@ -1 +1 @@\n-old\n+new\n"
-                                       "@@ -10,0 +11 @@\n+later")))))))
+                                       "@@ -10,0 +11 @@\n+later")))
+                           ((filename . "src/b.el")
+                            (status . "modified")
+                            (additions . 1)
+                            (deletions . 0)
+                            (patch . "@@ -0,0 +1 @@\n+new"))))))
             (threads
              . (((id . "T1")
                  (root_id . 10)
@@ -1334,7 +1339,11 @@
                  (comments . (((id . 10)
                                (user . ((login . "bob")))
                                (created_at . "2026-07-01T00:00:00Z")
-                               (body . "Please change this")))))))))
+                               (body . "Please change this"))
+                              ((id . 11)
+                               (user . ((login . "alice")))
+                               (created_at . "2026-07-02T00:00:00Z")
+                               (body . "Agreed")))))))))
          text)
     (puthash current-key
              '((:id 1 :path "src/a.el" :line 1 :side "RIGHT"
@@ -1378,7 +1387,13 @@
         (should-not (oref (car hunks) hidden))))
     (should (string-match-p "PR #7  Review me" text))
     (should (string-match-p "APPROVED by alice" text))
+    (should (string-match-p
+             (regexp-quote "src/a.el modified +2 -1 2 comments") text))
+    (should (string-match-p
+             (regexp-quote "src/b.el modified +1 -0\n") text))
+    (should-not (string-match-p "0 comments" text))
     (should (string-match-p "Please change this" text))
+    (should (string-match-p "Agreed" text))
     (should (string-match-p "Local draft" text))
     (should (string-match-p "Stale drafts (cannot be submitted)" text))
     (should (string-match-p "Old draft" text))))
