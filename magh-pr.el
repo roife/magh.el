@@ -156,6 +156,8 @@
                      (magh-api--pr-commits context number ok fail force)))
     (cons 'files (lambda (ok fail)
                    (magh-api--pr-files context number ok fail force)))
+    (cons 'reviews (lambda (ok fail)
+                     (magh-api--pr-reviews context number ok fail force)))
     (cons 'review-comments
           (lambda (ok fail)
             (magh-api--pr-review-comments context number ok fail force))))
@@ -186,22 +188,68 @@ PROPERTIES may identify a file, review, or inline comment within the review."
       (magh-resource-create
        'check context :title name :url url))))
 
-(defun magh-pr--conversation-items (pr inline-comments)
-  "Return sorted conversation items from PR and INLINE-COMMENTS."
-  (sort
-   (append
-    (mapcar (lambda (item) (cons 'comment item))
-            (alist-get 'comments pr))
-    (mapcar (lambda (item) (cons 'review item))
-            (alist-get 'reviews pr))
-    (mapcar (lambda (item) (cons 'inline item)) inline-comments))
-   (lambda (a b)
-     (string< (or (alist-get 'createdAt (cdr a))
-                  (alist-get 'submittedAt (cdr a))
-                  (alist-get 'created_at (cdr a)) "")
-              (or (alist-get 'createdAt (cdr b))
-                  (alist-get 'submittedAt (cdr b))
-                  (alist-get 'created_at (cdr b)) "")))))
+(defun magh-pr--conversation-items (pr reviews inline-comments)
+  "Return sorted conversation items from PR, REVIEWS, and INLINE-COMMENTS.
+Inline comments belonging to a submitted review are stored on that review as
+`inlineComments'.  Empty COMMENTED reviews are omitted."
+  (let (associated review-items)
+    (dolist (review reviews)
+      (let* ((review-id (alist-get 'id review))
+             (state (upcase (or (alist-get 'state review) "")))
+             (body (string-trim (or (alist-get 'body review) "")))
+             (comments
+              (seq-filter
+               (lambda (comment)
+                 (equal (alist-get 'pull_request_review_id comment) review-id))
+               inline-comments)))
+        (unless (equal state "PENDING")
+          (setq associated (append comments associated))
+          (when (or comments (not (string-empty-p body))
+                    (not (member state '("" "COMMENTED"))))
+            (push (cons 'review
+                        (cons (cons 'inlineComments comments) review))
+                  review-items)))))
+    (sort
+     (append
+      (mapcar (lambda (item) (cons 'comment item))
+              (alist-get 'comments pr))
+      (nreverse review-items)
+      (mapcar (lambda (item) (cons 'inline item))
+              (seq-remove (lambda (comment) (memq comment associated))
+                          inline-comments)))
+     (lambda (a b)
+       (string< (or (alist-get 'createdAt (cdr a))
+                    (alist-get 'submittedAt (cdr a))
+                    (alist-get 'submitted_at (cdr a))
+                    (alist-get 'created_at (cdr a)) "")
+                (or (alist-get 'createdAt (cdr b))
+                    (alist-get 'submittedAt (cdr b))
+                    (alist-get 'submitted_at (cdr b))
+                    (alist-get 'created_at (cdr b)) ""))))))
+
+(defun magh-pr--insert-conversation-inline-comment (context number data)
+  "Insert inline review comment DATA for Pull Request NUMBER in CONTEXT."
+  (let* ((id (alist-get 'id data))
+         (author (magh-core--name (alist-get 'user data)))
+         (date (magh-core--date (alist-get 'created_at data)))
+         (path (alist-get 'path data))
+         (line (or (alist-get 'line data) (alist-get 'original_line data)))
+         (resource
+          (magh-pr--review-resource
+           context number :comment-id id :path path :line line
+           :side (or (alist-get 'side data)
+                     (alist-get 'original_side data))))
+         (heading
+          (concat
+           (magh-ui--styled "Inline comment" 'magh-conversation-kind)
+           " by " (or (magh-ui--styled author 'magh-author) "")
+           " · " (or (magh-ui--styled date 'magh-date) ""))))
+    (magh-ui--section (inline-comment id resource nil)
+      heading
+      (when path
+        (magh-ui--insert-header
+         "Location" (format "%s:%s" path line) 'magh-file resource))
+      (magh-ui--insert-markdown (alist-get 'body data) context))))
 
 (defun magh-pr--render-conversation (context number items)
   "Render Pull Request NUMBER conversation ITEMS in CONTEXT."
@@ -216,11 +264,13 @@ PROPERTIES may identify a file, review, or inline comment within the review."
                    (date (magh-core--date
                           (or (alist-get 'createdAt data)
                               (alist-get 'submittedAt data)
+                              (alist-get 'submitted_at data)
                               (alist-get 'created_at data))))
                    (state (alist-get 'state data))
                    (path (alist-get 'path data))
                    (line (or (alist-get 'line data)
                              (alist-get 'original_line data)))
+                   (inline-comments (alist-get 'inlineComments data))
                    (resource
                     (pcase kind
                       ('review
@@ -242,26 +292,39 @@ PROPERTIES may identify a file, review, or inline comment within the review."
                      (if state
                          (concat " " (magh-ui--styled
                                        state (magh-core--state-face state))) "")
-                     " · " (or (magh-ui--styled date 'magh-date) ""))))
-        (if (eq kind 'inline)
-            (magh-ui--section (inline-comment id resource nil)
-              heading
-              (when path
-                (magh-ui--insert-header
-                 "Location" (format "%s:%s" path line) 'magh-file resource))
-              (magh-ui--insert-markdown (alist-get 'body data) context))
-          (magh-ui--section (comment id resource nil)
-            heading
-            (when path
-              (magh-ui--insert-header
-               "Location" (format "%s:%s" path line) 'magh-file resource))
-            (magh-ui--insert-markdown (alist-get 'body data) context)))))))
+                     " · " (or (magh-ui--styled date 'magh-date) "")
+                     (if (and (eq kind 'review) inline-comments)
+                         (format " · %d inline comment%s"
+                                 (length inline-comments)
+                                 (if (= (length inline-comments) 1) "" "s"))
+                       ""))))
+        (pcase kind
+          ('inline
+           (magh-pr--insert-conversation-inline-comment context number data))
+          ('review
+           (magh-ui--section (comment (cons 'review id) resource t)
+             heading
+             (let ((body (or (alist-get 'body data) "")))
+               (unless (string-empty-p (string-trim body))
+                 (magh-ui--insert-markdown body context)
+                 (when inline-comments (insert "\n"))))
+             (dolist (comment inline-comments)
+               (magh-pr--insert-conversation-inline-comment
+                context number comment))))
+          (_
+           (magh-ui--section (comment id resource nil)
+             heading
+             (when path
+               (magh-ui--insert-header
+                "Location" (format "%s:%s" path line) 'magh-file resource))
+             (magh-ui--insert-markdown (alist-get 'body data) context))))))))
 
 (defun magh-pr--render-view (context result)
   "Render Pull Request detail RESULT in CONTEXT."
   (let* ((pr (alist-get 'pr result))
          (commits (alist-get 'commits result))
          (files (alist-get 'files result))
+         (reviews (or (alist-get 'reviews result) (alist-get 'reviews pr)))
          (inline-comments (alist-get 'review-comments result))
          (checks (alist-get 'statusCheckRollup pr))
          (resource (magh-pr--resource context pr))
@@ -347,7 +410,7 @@ PROPERTIES may identify a file, review, or inline comment within the review."
              (magh-ui--styled (upcase status) (magh-core--state-face status))
              (magh-ui--styled name 'magh-workflow))))))
     (magh-pr--render-conversation
-     context number (magh-pr--conversation-items pr inline-comments))))
+     context number (magh-pr--conversation-items pr reviews inline-comments))))
 
 (defun magh-pr--setup-view (context number)
   "Install detail keys for Pull Request NUMBER in CONTEXT."

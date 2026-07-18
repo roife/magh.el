@@ -641,24 +641,45 @@
 (ert-deftest magh-pr-conversation-review-items-open-the-pr-review ()
   (let* ((magh-date-format-function #'identity)
          (context (magh-context-from-repository "base/repo"))
-         (head-oid "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
          (items
-          `((review . ((id . "r1") (author . ((login . "alice")))
-                       (submittedAt . "submitted") (state . "APPROVED")
-                       (commit . ((oid . ,head-oid))) (body . "")))
-            (inline . ((id . 2) (user . ((login . "bob")))
-                       (created_at . "created") (path . "src/a.el")
-                       (line . 7) (body . "Inline body")))))
-         (text
-          (magh-test-render-page
-           'conversation 1
-           (lambda (_)
-             (magh-pr--render-conversation
-              context 7 items))
-           nil)))
-    (should-not (string-match-p "Author: alice\n" text))
-    (should-not (string-match-p "Commit: " text))
-    (dolist (spec '(("Review by alice" :review-id "r1")
+          (magh-pr--conversation-items
+           '((comments . nil))
+           '(((id . 101) (user . ((login . "alice")))
+              (submitted_at . "2026-07-01") (state . "APPROVED") (body . ""))
+             ((id . 102) (user . ((login . "carol")))
+              (submitted_at . "2026-07-02") (state . "COMMENTED") (body . ""))
+             ((id . 103) (user . ((login . "dave")))
+              (submitted_at . "2026-07-03")
+              (state . "CHANGES_REQUESTED") (body . "")))
+           '(((id . 2) (pull_request_review_id . 101)
+              (user . ((login . "bob"))) (created_at . "2026-06-30")
+              (path . "src/a.el") (line . 7) (body . "Inline body")))))
+         text)
+    (should (= (length items) 2))
+    (should (= (length (alist-get 'inlineComments (cdar items))) 1))
+    (with-temp-buffer
+      (magh-section-mode)
+      (setq magh-buffer-context context
+            magh-buffer-resource-kind 'conversation
+            magh-buffer-resource-id 1)
+      (magh-ui--replace
+       (lambda (_data) (magh-pr--render-conversation context 7 items)) nil nil)
+      (setq text (buffer-string))
+      (let* ((conversation (car (oref magit-root-section children)))
+             (review (car (oref conversation children))))
+        (should (oref review hidden))
+        (magit-section-show review)
+        (should-not (oref review hidden))
+        (should (equal (mapcar (lambda (section) (oref section type))
+                               (oref review children))
+                       '(inline-comment)))
+        (setq text (buffer-string))))
+    (should (string-match-p
+             "Review by alice APPROVED · 2026-07-01 · 1 inline comment" text))
+    (should-not (string-match-p "Review by carol" text))
+    (should (string-match-p
+             "Review by dave CHANGES_REQUESTED · 2026-07-03" text))
+    (dolist (spec '(("Review by alice" :review-id 101)
                     ("Inline comment by bob" :comment-id 2)))
       (let* ((position (string-match (car spec) text))
              (resource (and position

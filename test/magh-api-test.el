@@ -67,6 +67,18 @@
     '("api" "repos/o/r/items" "--method" "GET" "--paginate" "--slurp"
       "-F" "page=2" "-F" "enabled=true" "-f" "name=two words"))))
 
+(ert-deftest magh-api-pr-reviews-use-the-paginated-rest-endpoint ()
+  (let ((context (magh-context-from-repository "acme/widgets")) captured)
+    (cl-letf (((symbol-function 'magh-client--json-async)
+               (lambda (argv _success _error &rest keys)
+                 (setq captured (cons argv keys)) 'request)))
+      (magh-api--pr-reviews context 7 #'ignore #'ignore t))
+    (should (equal (seq-take (car captured) 3)
+                   '("api" "repos/acme/widgets/pulls/7/reviews" "--method")))
+    (should (member "--paginate" (car captured)))
+    (should (member "--slurp" (car captured)))
+    (should (plist-get (cdr captured) :force))))
+
 (ert-deftest magh-api-repo-viewer-fork-uses-owner-affiliation ()
   (let ((context (magh-context-from-repository "acme/widgets"))
         captured result)

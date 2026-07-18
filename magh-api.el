@@ -673,6 +673,17 @@ HEADERS is a list of complete header strings."
    callback errback :force force :transform #'magh-api--flatten-pages
    :domain (magh-api--domain context 'pr-file number)))
 
+(defun magh-api--pr-reviews (context number callback errback &optional force)
+  "Fetch submitted reviews for Pull Request NUMBER."
+  (setq context (magh-api--context context t))
+  (magh-api--read-json
+   context
+   (magh-api--rest-argv
+    (magh-core--repo-endpoint context (format "pulls/%d/reviews" number))
+    "GET" '((per_page . 100)) t)
+   callback errback :force force :transform #'magh-api--flatten-pages
+   :domain (magh-api--domain context 'pr number)))
+
 (defun magh-api--compare (context base head callback errback &optional force)
   "Fetch the repository comparison from BASE through HEAD."
   (setq context (magh-api--context context t))
