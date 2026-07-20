@@ -216,7 +216,7 @@
                     :url (alist-get 'html_url data))))
     (magh-ui--section (commit sha resource t)
       (magh-ui--row
-       (magh-ui--styled (substring sha 0 (min 10 (length sha))) 'magh-hash)
+       (magh-ui--styled (string-limit sha 10) 'magh-hash)
        (magh-ui--styled (magh-resource-title resource) 'magh-resource-title)
        (magh-ui--styled author 'magh-author)
        (magh-ui--styled
@@ -232,7 +232,7 @@
                      languages))
             (total (apply #'+ (mapcar #'cdr pairs)))
             ((> total 0)))
-      (dolist (entry (sort pairs (lambda (a b) (> (cdr a) (cdr b)))))
+      (dolist (entry (seq-sort-by #'cdr #'> pairs))
         (insert
          (magh-ui--row
           (magh-ui--styled (concat (car entry) ":") 'magh-metadata-key)
@@ -489,7 +489,7 @@ Interactively, offer Git remotes whose URLs identify GitHub repositories."
       magh-favorite-organizations)
      (lambda (results)
        (magh-repo--select "Favorite repository: "
-                        (apply #'append (mapcar #'cdr results))))
+                          (seq-mapcat #'cdr results)))
      #'magh-core--user-error)))
 
 ;;; Statistics

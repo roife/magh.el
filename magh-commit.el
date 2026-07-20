@@ -493,23 +493,13 @@
 
 (defun magh-commit--partition-patch-records (records)
   "Partition parsed patch RECORDS into a preamble and hunk records."
-  (let (preamble hunks current)
-    (dolist (record records)
-      (if (plist-get record :hunk-heading)
-          (progn
-            (when current
-              (push (list :heading (car current)
-                          :records (nreverse (cdr current)))
-                    hunks))
-            (setq current (list record)))
-        (if current
-            (setcdr current (cons record (cdr current)))
-          (push record preamble))))
-    (when current
-      (push (list :heading (car current)
-                  :records (nreverse (cdr current)))
-            hunks))
-    (list :preamble (nreverse preamble) :hunks (nreverse hunks))))
+  (let ((groups (seq-group-by (lambda (record) (plist-get record :hunk))
+                              records)))
+    (list :preamble (alist-get 0 groups)
+          :hunks
+          (mapcar (lambda (group)
+                    (list :heading (cadr group) :records (cddr group)))
+                  (assq-delete-all 0 groups)))))
 
 (defun magh-commit--insert-patch-records (records insert-record)
   "Insert parsed patch RECORDS as foldable hunks.
@@ -800,7 +790,7 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
       (when-let* ((window (get-buffer-window (current-buffer) t)))
         (set-window-point window (point))
         (with-selected-window window (recenter)))
-      (when (> (length (plist-get resource :targets)) 1)
+      (when (length> (plist-get resource :targets) 1)
         (message "Showing first of %d linked comments"
                  (length (plist-get resource :targets)))))))
 
@@ -835,7 +825,7 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
            (when targets
              (magh-ui--styled
               (format "(%d linked comment%s)"
-                      (length targets) (if (= (length targets) 1) "" "s"))
+                      (length targets) (if (length= targets 1) "" "s"))
               'magh-permission)))
           (when has-body
             (magh-ui--insert-markdown body context)
@@ -947,7 +937,7 @@ INSERT-RECORD inserts one non-heading record, including any anchored comments."
            :line (plist-get last :line)
            :side (plist-get last :side)
            :subject-type "LINE")
-     (when (> (length resources) 1)
+     (when (length> resources 1)
        (list :start-line (plist-get first :line)
              :start-side (plist-get first :side))))))
 

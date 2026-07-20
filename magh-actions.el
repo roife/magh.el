@@ -516,11 +516,9 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
          (selected
           (completing-read-multiple
            "Artifacts (empty means all): " choices nil t)))
-    (unless (null selected)
-      (delq nil
-            (mapcar (lambda (choice)
-                      (alist-get 'name (cdr (assoc choice choices))))
-                    selected)))))
+    (seq-keep (lambda (choice)
+                (alist-get 'name (cdr (assoc choice choices))))
+              selected)))
 
 ;;;###autoload
 (defun magh-run-artifact-download
@@ -557,7 +555,7 @@ An empty NAMES selection downloads all non-expired artifacts."
       (user-error "This run has no artifacts"))
     (let* ((selected
             (if names
-                (cl-remove-if-not
+                (seq-filter
                  (lambda (artifact)
                    (member (alist-get 'name artifact) names))
                  artifacts)

@@ -61,7 +61,7 @@
   (cond
    ((null value) "")
    ((plist-get definition :multiple)
-    (mapconcat #'identity value ","))
+    (string-join value ","))
    ((eq value t) "true")
    ((eq value :json-false) "false")
    (t (format "%s" value))))

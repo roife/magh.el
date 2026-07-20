@@ -311,7 +311,7 @@ Inline comments belonging to a submitted review are stored on that review as
                      (if (and (eq kind 'review) inline-comments)
                          (format " · %d inline comment%s"
                                  (length inline-comments)
-                                 (if (= (length inline-comments) 1) "" "s"))
+                                 (if (length= inline-comments 1) "" "s"))
                        ""))))
         (pcase kind
           ('inline

@@ -16,6 +16,8 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'magit-git)
+(require 'seq)
 (require 'subr-x)
 (require 'url-util)
 
@@ -235,18 +237,11 @@ Plain alists are accepted for compatibility with renderer callers."
   "Copy CONTEXT and apply plist OVERRIDES to its slots."
   (let ((copy (copy-magh-context context)))
     (cl-loop for (key value) on overrides by #'cddr
-             do (cl-ecase key
-                  (:host (setf (magh-context-host copy) value))
-                  (:owner (setf (magh-context-owner copy) value))
-                  (:name (setf (magh-context-name copy) value))
-                  (:repository (setf (magh-context-repository copy) value))
-                  (:root (setf (magh-context-root copy) value))
-                  (:remote (setf (magh-context-remote copy) value))
-                  (:branch (setf (magh-context-branch copy) value))
-                  (:default-branch
-                   (setf (magh-context-default-branch copy) value))
-                  (:ref (setf (magh-context-ref copy) value))
-                  (:path (setf (magh-context-path copy) value))))
+             do (setf (cl-struct-slot-value
+                       'magh-context
+                       (intern (substring (symbol-name key) 1))
+                       copy)
+                      value))
     (magh-context-normalize copy)))
 
 (defun magh-context-normalize (context)
@@ -288,68 +283,56 @@ Plain alists are accepted for compatibility with renderer callers."
   (let ((directory (file-name-as-directory
                     (expand-file-name (or directory default-directory)))))
     (and (not (file-remote-p directory))
-         (locate-dominating-file directory ".git"))))
-
-(defun magh-core--git-output (root &rest args)
-  "Run a local Git command in ROOT with ARGS and return trimmed output."
-  (when-let* ((git (executable-find "git")))
-    (with-temp-buffer
-      (let ((default-directory root))
-        (when (zerop (apply #'process-file git nil t nil args))
-          (let ((output (string-trim (buffer-string))))
-            (unless (string-empty-p output) output)))))))
+         (magit-toplevel directory))))
 
 (defun magh-core--git-remotes (root)
   "Return local Git remote names configured in ROOT."
-  (split-string (or (magh-core--git-output root "remote") "") "\n" t))
+  (let ((default-directory root))
+    (magit-list-remotes)))
 
 (defun magh-core--git-remote-url (root remote)
   "Return fetch URL for REMOTE in ROOT."
-  (magh-core--git-output root "remote" "get-url" remote))
+  (let ((default-directory root))
+    (magit-git-string "remote" "get-url" remote)))
 
 (defun magh-core--preferred-remote (root branch &optional requested)
   "Return the best GitHub REMOTE in ROOT for BRANCH.
 REQUESTED, when non-nil, is considered before Git's push and upstream
 configuration.  Remotes whose URLs cannot identify a GitHub repository are
 skipped."
-  (let* ((remotes (magh-core--git-remotes root))
-         (ordered
-          (delq nil
-                (append
-                 (list requested
-                       (and branch
-                            (magh-core--git-output
-                             root "config" "--get"
-                             (format "branch.%s.pushRemote" branch)))
-                       (magh-core--git-output
-                        root "config" "--get" "remote.pushDefault")
-                       (and branch
-                            (magh-core--git-output
-                             root "config" "--get"
-                             (format "branch.%s.remote" branch)))
-                       "origin")
-                 ;; Copy REMOTES so destructive de-duplication cannot alter it.
-                 remotes nil)))
-         (candidates (delete-dups ordered)))
-    (cl-find-if
+  (let* ((default-directory root)
+         (remotes (magit-list-remotes))
+         (candidates
+          (seq-uniq
+           (append
+            (seq-keep
+             #'identity
+             (list requested
+                   (and branch (magit-get "branch" branch "pushRemote"))
+                   (magit-get "remote.pushDefault")
+                   (and branch (magit-get "branch" branch "remote"))
+                   "origin"))
+            remotes))))
+    (seq-find
      (lambda (remote)
        (and (member remote remotes)
             (magh-core--remote-components
-             (magh-core--git-remote-url root remote))))
+             (magit-git-string "remote" "get-url" remote))))
      candidates)))
 
 (defun magh-core--local-context (&optional directory remote)
   "Build a context from local Git metadata under DIRECTORY.
 When REMOTE is non-nil, prefer that named Git remote."
   (when-let* ((root (magh-core--git-root directory)))
-    (let* ((branch (magh-core--git-output root "branch" "--show-current"))
+    (let* ((default-directory root)
+           (branch (magit-get-current-branch))
            (remote-name (magh-core--preferred-remote root branch remote))
            (remote-url (and remote-name
-                            (magh-core--git-remote-url root remote-name)))
+                            (magit-git-string "remote" "get-url" remote-name)))
            (parts (magh-core--remote-components remote-url))
            (head (and remote-name
-                      (magh-core--git-output
-                       root "symbolic-ref" "--short"
+                      (magit-git-string
+                       "symbolic-ref" "--short"
                        (format "refs/remotes/%s/HEAD" remote-name))))
            (default-branch
             (and head
@@ -379,13 +362,12 @@ When REMOTE is non-nil, prefer that named Git remote."
   "Return supported local Git remotes for CONTEXT as (NAME . CONTEXT) pairs."
   (setq context (magh-context-resolve context))
   (when-let* ((root (magh-context-root context)))
-    (delq nil
-          (mapcar
-           (lambda (remote)
-             (condition-case nil
-                 (cons remote (magh-context-from-local-remote root remote))
-               (magh-invalid-input nil)))
-           (magh-core--git-remotes root)))))
+    (seq-keep
+     (lambda (remote)
+       (condition-case nil
+           (cons remote (magh-context-from-local-remote root remote))
+         (magh-invalid-input nil)))
+     (magh-core--git-remotes root))))
 
 (defun magh-context-from-repository (repository &optional host)
   "Create a context from REPOSITORY and optional HOST.

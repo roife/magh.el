@@ -18,6 +18,7 @@
 (require 'base64)
 (require 'cl-lib)
 (require 'json)
+(require 'map)
 (require 'seq)
 (require 'subr-x)
 (require 'magh-core)
@@ -303,7 +304,7 @@ Each entry is (KEY FLAG KIND), where KIND is `repeat', `switch', `boolean',
 
 (defun magh-api--flatten-pages (data)
   "Flatten `gh api --paginate --slurp' DATA."
-  (apply #'append data))
+  (seq-mapcat #'identity data))
 
 (defun magh-api--read-rest-pages
     (context endpoint fields callback errback force domain
@@ -840,9 +841,8 @@ data type.  VALUE is ignored when CLEAR is non-nil."
   (let* ((connection (magh-api--json-at data 'data 'search))
          (page-info (alist-get 'pageInfo connection)))
     (magh-page-create
-     :items (delq nil
-                  (mapcar #'magh-api--normalize-topic-node
-                          (alist-get 'nodes connection)))
+     :items (seq-keep #'magh-api--normalize-topic-node
+                      (alist-get 'nodes connection))
      :next (and (alist-get 'hasNextPage page-info)
                 (alist-get 'endCursor page-info)))))
 
@@ -1109,19 +1109,15 @@ data type.  VALUE is ignored when CLEAR is non-nil."
 (defun magh-api--pr-review-normalize-threads (comments metadata)
   "Combine flat REST COMMENTS with GraphQL thread METADATA."
   (let ((metadata-by-root (make-hash-table :test #'equal))
-        (replies-by-root (make-hash-table :test #'equal))
-        roots)
+        (comment-groups
+         (seq-group-by (lambda (comment)
+                         (alist-get 'in_reply_to_id comment))
+                       comments)))
     (dolist (thread metadata)
       (when-let* ((root
                    (car (magh-api--json-at thread 'comments 'nodes)))
                   (database-id (alist-get 'databaseId root)))
         (puthash database-id thread metadata-by-root)))
-    (dolist (comment comments)
-      (if-let* ((root-id (alist-get 'in_reply_to_id comment)))
-          (puthash root-id
-                   (cons comment (gethash root-id replies-by-root))
-                   replies-by-root)
-        (push comment roots)))
     (mapcar
      (lambda (root)
        (let* ((root-id (alist-get 'id root))
@@ -1157,8 +1153,8 @@ data type.  VALUE is ignored when CLEAR is non-nil."
                                       (alist-get 'viewerCanUnresolve thread)))
            (resolved_by . ,(alist-get 'resolvedBy thread))
            (comments . ,(cons root
-                              (nreverse (gethash root-id replies-by-root)))))))
-     (nreverse roots))))
+                              (cdr (assoc root-id comment-groups)))))))
+     (cdr (assoc nil comment-groups)))))
 
 (defun magh-api--pr-review-threads
     (context number callback errback &optional force)
@@ -1347,8 +1343,7 @@ degrades to readable and replyable threads without resolution capabilities."
 
 (defun magh-api--json-at (data &rest keys)
   "Return the value below KEYS in nested JSON alist DATA."
-  (dolist (key keys data)
-    (setq data (alist-get key data))))
+  (map-nested-elt data keys))
 
 (defun magh-api--graphql-payload (query variables)
   "Serialize GraphQL QUERY and VARIABLES for `gh api --input -'."
@@ -1530,8 +1525,7 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
 
 (defun magh-api--artifact-pages (pages)
   "Flatten artifact arrays from paginated REST PAGES."
-  (apply #'append
-         (mapcar (lambda (page) (alist-get 'artifacts page)) pages)))
+  (seq-mapcat (lambda (page) (alist-get 'artifacts page)) pages))
 
 (defun magh-api--artifact-list
     (context run-id callback errback &optional force)
@@ -1820,7 +1814,7 @@ When NAMES is nil, download every artifact in the run."
      :transform
      (lambda (items)
        (magh-page-create :items items
-                         :next (and (= (length items) page-size) (1+ page))))
+                         :next (and (length= items page-size) (1+ page))))
      :domain (magh-api--domain context 'commit (list params page)))))
 
 (defun magh-api--commit-list (context params callback errback &optional force)
@@ -2141,14 +2135,13 @@ When NAMES is nil, download every artifact in the run."
   "Return a JSON object for Gist FILES.
 FILES is an alist whose keys are current filenames.  Values are plists with
 optional :content and :filename keys, or nil to remove the file."
-  (let ((object (make-hash-table :test #'equal)) seen)
+  (let ((object (make-hash-table :test #'equal)))
     (dolist (entry files object)
       (let ((filename (car entry)) (spec (cdr entry)))
         (when (string-empty-p (or filename ""))
           (user-error "Gist filenames cannot be empty"))
-        (when (member filename seen)
+        (when (hash-table-contains-p filename object)
           (user-error "Duplicate Gist filename: %s" filename))
-        (push filename seen)
         (when (and spec (plist-member spec :filename)
                    (string-empty-p (or (plist-get spec :filename) "")))
           (user-error "Gist filenames cannot be empty"))

@@ -27,6 +27,7 @@
 (require 'magit-process)
 (require 'magit-section)
 (require 'markdown-mode)
+(require 'seq)
 (require 'subr-x)
 (require 'url)
 (require 'url-http)
@@ -468,14 +469,12 @@ non-nil, runs in the page buffer after mode initialization."
   "Join non-empty VALUES with one space, preserving text properties.
 Rows intentionally have no column widths, padding, or truncation; their shape
 matches ordinary Magit section headings and the layouts in doc/UI.md."
-  (mapconcat
-   #'identity
-   (delq nil
-         (mapcar (lambda (value)
-                   (when value
-                     (let ((text (format "%s" value)))
-                       (unless (string-empty-p text) text))))
-                 values))
+  (string-join
+   (seq-keep (lambda (value)
+               (when value
+                 (let ((text (format "%s" value)))
+                   (unless (string-empty-p text) text))))
+             values)
    " "))
 
 (defun magh-ui--format-row (values &optional fields)

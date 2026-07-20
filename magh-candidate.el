@@ -236,7 +236,7 @@ CONTEXT supplies local navigation state when URL is relative to the same host."
                     "/" (car (url-path-and-query parsed)))
                    "/")))
       (when (and (member (url-type parsed) '("http" "https"))
-                 (url-host parsed) (>= (length parts) 2)
+                 (url-host parsed) (length> parts 1)
                  (not (string-empty-p (car parts)))
                  (not (string-empty-p (cadr parts))))
         (pcase-let* ((`(,owner ,name . ,path) parts)

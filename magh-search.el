@@ -109,7 +109,7 @@
     ('commit
      (let ((sha (plist-get resource :sha)))
        (magh-ui--row
-        (magh-search--styled (substring sha 0 (min 10 (length sha))) 'magh-hash)
+        (magh-search--styled (string-limit sha 10) 'magh-hash)
         (magh-search--styled
          (car (string-lines (plist-get resource :title)))
          'magh-resource-title))))
