@@ -1,6 +1,7 @@
 ;;; magh-api.el --- Resource API contracts for magh.el -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github
@@ -44,6 +45,23 @@
   '(number title state isDraft author assignees labels milestone headRefName
     headRefOid baseRefName baseRefOid reviewDecision reviewRequests comments
     changedFiles additions deletions createdAt updatedAt closedAt mergedAt url))
+
+(defconst magh-api--topic-page-query
+  (concat
+   "query($queryString:String!,$first:Int!,$after:String){"
+   "search(query:$queryString,type:ISSUE,first:$first,after:$after){"
+   "nodes{__typename "
+   "... on Issue{number title state stateReason author{login} "
+   "assignees(first:100){nodes{login}} labels(first:100){nodes{name}} "
+   "milestone{title} comments{totalCount} createdAt updatedAt closedAt url "
+   "isPinned} "
+   "... on PullRequest{number title state isDraft author{login} "
+   "assignees(first:100){nodes{login}} labels(first:100){nodes{name}} "
+   "milestone{title} headRefName headRefOid baseRefName baseRefOid "
+   "reviewDecision comments{totalCount} changedFiles additions deletions "
+   "createdAt updatedAt closedAt mergedAt url}}"
+   "pageInfo{hasNextPage endCursor}}}")
+  "GraphQL query used for cursor-paginated Issue and Pull Request lists.")
 
 (defconst magh-api--pr-view-fields
   '(id number title state isDraft author assignees labels milestone projectItems
@@ -493,6 +511,112 @@ HEADERS is a list of complete header strings."
 
 ;;; Issue
 
+(defun magh-api--page-size (params)
+  "Return a valid GitHub page size for PARAMS."
+  (max 1 (min 100 (or (plist-get params :limit) magh-list-limit))))
+
+(defun magh-api--search-qualifier (name value)
+  "Return GitHub search qualifier NAME for VALUE."
+  (let ((text (format "%s" value)))
+    (when (string-match-p "[[:space:]\\\"\\\\]" text)
+      (setq text
+            (concat
+             "\""
+             (replace-regexp-in-string
+              "[\\\"\\\\]" (lambda (match) (concat "\\\\" match)) text t t)
+             "\"")))
+    (format "%s:%s" name text)))
+
+(defun magh-api--topic-search-query (context kind params)
+  "Build a stable search query for KIND in CONTEXT using PARAMS."
+  (let* ((state (downcase (or (plist-get params :state)
+                              (if (eq kind 'issue)
+                                  magh-default-issue-state
+                                magh-default-pr-state))))
+         (raw (string-trim (or (plist-get params :search) "")))
+         (parts
+          (list
+           (magh-api--search-qualifier
+            "repo" (magh-context-repository context))
+           (if (eq kind 'issue) "is:issue" "is:pr"))))
+    (setq parts
+          (append
+           parts
+           (pcase (cons kind state)
+             (`(issue . "open") '("is:open"))
+             (`(issue . "closed") '("is:closed"))
+             (`(pr . "open") '("is:open"))
+             (`(pr . "closed") '("is:closed" "is:unmerged"))
+             (`(pr . "merged") '("is:merged"))
+             (_ nil))))
+    (dolist (entry `(("assignee" . ,(plist-get params :assignee))
+                     ("author" . ,(plist-get params :author))
+                     ("mentions" . ,(plist-get params :mention))
+                     ("milestone" . ,(plist-get params :milestone))))
+      (when (cdr entry)
+        (setq parts
+              (append parts
+                      (list (magh-api--search-qualifier
+                             (car entry) (cdr entry)))))))
+    (dolist (label (plist-get params :labels))
+      (setq parts
+            (append parts
+                    (list (magh-api--search-qualifier "label" label)))))
+    (when (eq kind 'pr)
+      (dolist (entry `(("base" . ,(plist-get params :base))
+                       ("head" . ,(plist-get params :head))))
+        (when (cdr entry)
+          (setq parts
+                (append parts
+                        (list (magh-api--search-qualifier
+                               (car entry) (cdr entry)))))))
+      (when (magh-api--true-p (plist-get params :draft))
+        (setq parts (append parts '("draft:true")))))
+    (unless (string-empty-p raw)
+      (setq parts (append parts (list raw))))
+    (unless (string-match-p "\\(?:\\`\\|[[:space:]]\\)sort:" raw)
+      (setq parts (append parts '("sort:created-desc"))))
+    (string-join parts " ")))
+
+(defun magh-api--normalize-topic-node (node)
+  "Normalize GraphQL search NODE to the shapes used by native pages."
+  (setq node (copy-tree node))
+  (dolist (key '(assignees labels))
+    (when-let* ((connection (alist-get key node)))
+      (setf (alist-get key node) (alist-get 'nodes connection))))
+  (assq-delete-all '__typename node))
+
+(defun magh-api--topic-page-transform (data)
+  "Convert GraphQL search DATA to a `magh-page'."
+  (let* ((connection (magh-api--json-at data 'data 'search))
+         (page-info (alist-get 'pageInfo connection)))
+    (magh-page-create
+     :items (delq nil
+                  (mapcar #'magh-api--normalize-topic-node
+                          (alist-get 'nodes connection)))
+     :next (and (alist-get 'hasNextPage page-info)
+                (alist-get 'endCursor page-info)))))
+
+(defun magh-api--topic-page
+    (context kind params cursor callback errback &optional force)
+  "Fetch one cursor page of KIND in CONTEXT using PARAMS and CURSOR."
+  (setq context (magh-api--context context t))
+  (let ((variables
+         `((queryString . ,(magh-api--topic-search-query context kind params))
+           (first . ,(magh-api--page-size params))
+           (after . ,(or cursor :null)))))
+    (magh-api--read-json
+     context '("api" "graphql" "--input" "-") callback errback
+     :force force
+     :domain (magh-api--domain context kind (list params cursor))
+     :transform #'magh-api--topic-page-transform
+     :stdin (magh-api--graphql-payload magh-api--topic-page-query variables))))
+
+(defun magh-api--issue-page
+    (context params cursor callback errback &optional force)
+  "Fetch one cursor-paginated Issue page in CONTEXT."
+  (magh-api--topic-page context 'issue params cursor callback errback force))
+
 (defun magh-api--issue-list
     (context params callback errback &optional force)
   "Fetch an Issue list in CONTEXT using PARAMS plist."
@@ -620,6 +744,11 @@ HEADERS is a list of complete header strings."
    callback errback))
 
 ;;; Pull Request
+
+(defun magh-api--pr-page
+    (context params cursor callback errback &optional force)
+  "Fetch one cursor-paginated Pull Request page in CONTEXT."
+  (magh-api--topic-page context 'pr params cursor callback errback force))
 
 (defun magh-api--pr-list (context params callback errback &optional force)
   "Fetch Pull Requests in CONTEXT using PARAMS plist."
@@ -1416,17 +1545,32 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
 
 ;;; Commit and remote content
 
+(defun magh-api--commit-page
+    (context params page callback errback &optional force)
+  "Fetch one PAGE of commit history in CONTEXT using PARAMS plist."
+  (setq context (magh-api--context context t))
+  (let* ((page-size (magh-api--page-size params))
+         (page (if (and (integerp page) (> page 0)) page 1)))
+    (magh-api--read-json
+     context
+     (magh-api--rest-argv
+      (magh-core--repo-endpoint context "commits") "GET"
+      (append `((per_page . ,page-size) (page . ,page))
+              (when-let* ((ref (plist-get params :ref))) `((sha . ,ref)))
+              (when-let* ((path (plist-get params :path))) `((path . ,path)))))
+     callback errback :force force
+     :transform
+     (lambda (items)
+       (magh-page-create :items items
+                         :next (and (= (length items) page-size) (1+ page))))
+     :domain (magh-api--domain context 'commit (list params page)))))
+
 (defun magh-api--commit-list (context params callback errback &optional force)
   "Fetch commit history in CONTEXT using PARAMS plist."
-  (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv
-    (magh-core--repo-endpoint context "commits") "GET"
-    (append `((per_page . ,(or (plist-get params :limit) magh-list-limit)))
-            (when-let* ((ref (plist-get params :ref))) `((sha . ,ref)))
-            (when-let* ((path (plist-get params :path))) `((path . ,path)))))
-   callback errback :force force :domain (magh-api--domain context 'commit)))
+  (magh-api--commit-page
+   context params nil
+   (lambda (page) (funcall callback (magh-page-items page)))
+   errback force))
 
 (defun magh-api--commit-get (context sha callback errback &optional force)
   "Fetch Commit SHA details."

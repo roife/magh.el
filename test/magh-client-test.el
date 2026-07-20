@@ -75,6 +75,21 @@
         (should-not callback-ran)
         (magh-test-wait (lambda () callback-ran))))))
 
+(ert-deftest magh-client-cache-distinguishes-identical-argv-by-stdin ()
+  (magh-test-with-clean-client
+    (let (first second)
+      (magh-client--json-async
+       '("stdin-json" "same-argv")
+       (lambda (value) (setq first value)) #'ignore :stdin "first payload")
+      (magh-test-wait (lambda () first))
+      (magh-client--json-async
+       '("stdin-json" "same-argv")
+       (lambda (value) (setq second value)) #'ignore :stdin "second payload")
+      (magh-test-wait (lambda () second))
+      (should (equal (alist-get 'stdin first) "first payload"))
+      (should (equal (alist-get 'stdin second) "second payload"))
+      (should (= (magh-client-cache-size) 2)))))
+
 (ert-deftest magh-client-cancellation-is-typed ()
   (magh-test-with-clean-client
     (let (failure success)

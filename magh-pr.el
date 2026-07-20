@@ -1,6 +1,7 @@
 ;;; magh-pr.el --- Pull Request and review workflow for magh.el -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github
@@ -88,17 +89,23 @@
 
 (defun magh-pr--render-list (context state data)
   "Render Pull Request list DATA in CONTEXT for STATE."
-  (magh-ui--insert-header "Repository" (magh-context-repository context)
-                        'magh-repository (magh-resource-create 'repository context))
-  (magh-ui--insert-header "Pull requests" state)
-  (insert "\n")
-  (if data
-      (dolist (pr data) (magh-pr--insert-row context pr))
-    (insert (propertize "No matching pull requests.\n"
-                        'font-lock-face 'shadow)))
-  (magh-ui--section (more 'more (magh-resource-create 'pr-more context) t)
-    (format "Load more (current limit %d)" magh-pr--limit)
-    (insert "Press RET to double the list limit.\n")))
+  (let ((items (if (magh-page-p data) (magh-page-items data) data))
+        (next (and (magh-page-p data) (magh-page-next data))))
+    (magh-ui--insert-header "Repository" (magh-context-repository context)
+                          'magh-repository
+                          (magh-resource-create 'repository context))
+    (magh-ui--insert-header "Pull requests" state)
+    (insert "\n")
+    (if items
+        (dolist (pr items) (magh-pr--insert-row context pr))
+      (insert (propertize "No matching pull requests.\n"
+                          'font-lock-face 'shadow)))
+    (if next
+        (magh-ui--section (more 'more (magh-resource-create 'pr-more context) t)
+          (format "Load next page (%d loaded)" (length items))
+          (insert "Press RET to append more pull requests.\n"))
+      (insert (propertize (format "End of list (%d items).\n" (length items))
+                          'font-lock-face 'shadow)))))
 
 ;;;###autoload
 (defun magh-pr-list (&optional context state params)
@@ -110,8 +117,9 @@
     (magh-ui--open-page
      (magh-pr--buffer-name context) context 'pr-list state
      (lambda (success error force)
-       (magh-api--pr-list context (append (list :state state :limit limit) params)
-                        success error force))
+       (magh-api--pr-page
+        context (append (list :state state :limit limit) params)
+        nil success error force))
      (lambda (data) (magh-pr--render-list context state data))
      :setup
      (lambda ()
@@ -122,19 +130,18 @@
        (setq magh-buffer-dispatch-function #'magh-pr-dispatch)))))
 
 (defun magh-pr-load-more ()
-  "Double current Pull Request list limit and refresh."
+  "Append the next page to the current Pull Request list."
   (interactive)
   (let ((context magh-buffer-context)
         (state magh-pr--state)
         (params magh-pr--params)
-        (limit (* 2 magh-pr--limit)))
-    (setq magh-pr--limit limit
-          magh-buffer-refresh-function
-          (lambda (success error force)
-            (magh-api--pr-list
-             context (append (list :state state :limit limit) params)
-             success error force)))
-    (magh-ui-refresh t)))
+        (limit magh-pr--limit))
+    (magh-ui--load-next-page
+     (lambda (cursor success error)
+       (magh-api--pr-page
+        context (append (list :state state :limit limit) params)
+        cursor success error))
+     "pull requests")))
 
 (defun magh-pr-cycle-state ()
   "Cycle Pull Request list state."

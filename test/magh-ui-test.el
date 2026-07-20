@@ -174,6 +174,87 @@
     (font-lock-ensure (point-min) (point-max))
     (buffer-string)))
 
+(ert-deftest magh-status-pages-render-successful-sections-beside-failures ()
+  (let* ((context (magh-context-from-repository "o/r"))
+         (user-error (magh-core--error 'magh-api-error
+                                      "Assigned issues unavailable"))
+         (user-result
+          (magh-batch-result-create
+           :values
+           (list
+            (cons 'user '((login . "alice") (name . "Alice")
+                          (followers . 2) (following . 3)))
+            (cons 'notifications nil) (cons 'review-requests nil)
+            (cons 'assigned-prs nil) (cons 'my-prs nil)
+            (cons 'repositories nil))
+           :errors (list (cons 'assigned-issues user-error))))
+         (user-text
+          (magh-test-render-page
+           'user-status 'viewer
+           (lambda (data) (magh-pages--render-user-status context data))
+           user-result)))
+    (should (string-match-p "User: Alice (@alice)" user-text))
+    (should (string-match-p "Unavailable: Assigned issues unavailable"
+                            user-text))
+    (should (string-match-p "Repositories" user-text)))
+  (let* ((context (magh-context-from-repository "o/r"))
+         (branches-error
+          (magh-core--error 'magh-api-error "Branches unavailable"))
+         (repo-result
+          (magh-batch-result-create
+           :values
+           (list
+            (cons 'repository
+                  '((nameWithOwner . "o/r") (visibility . "PUBLIC")
+                    (stargazerCount . 1) (forkCount . 2)
+                    (watchers . ((totalCount . 3)))))
+            (cons 'viewer-forked nil) (cons 'languages nil)
+            (cons 'issues nil) (cons 'prs nil) (cons 'runs nil)
+            (cons 'commits nil) (cons 'releases nil))
+           :errors (list (cons 'branches branches-error))))
+         (repo-text
+          (magh-test-render-page
+           'repository "o/r"
+           (lambda (data) (magh-repo--render-status context data))
+           repo-result)))
+    (should (string-match-p "Repository: o/r" repo-text))
+    (should (string-match-p "Unavailable: Branches unavailable" repo-text))
+    (should (string-match-p "Releases" repo-text))))
+
+(ert-deftest magh-ui-load-next-page-appends-without-refetching-earlier-items ()
+  (with-temp-buffer
+    (setq magh-ui--data (magh-page-create :items '(1 2) :next "cursor")
+          magh-ui--generation 3)
+    (let (received)
+      (cl-letf (((symbol-function 'magh-ui--update-data)
+                 (lambda (data) (setq magh-ui--data data))))
+        (magh-ui--load-next-page
+         (lambda (cursor success _error)
+           (setq received cursor)
+           (funcall success (magh-page-create :items '(3) :next nil)))
+         "items"))
+      (should (equal received "cursor"))
+      (should (equal (magh-page-items magh-ui--data) '(1 2 3)))
+      (should-not (magh-page-next magh-ui--data))
+      (should-not magh-ui--page-loading))))
+
+(ert-deftest magh-repo-switch-remote-opens-the-selected-context ()
+  (let* ((base (magh-context-copy
+                (magh-context-from-repository "upstream/widgets")
+                :root "/tmp/widgets/" :remote "origin"))
+         (fork (magh-context-copy
+                (magh-context-from-repository "alice/widgets")
+                :root "/tmp/widgets/" :remote "fork"))
+         opened)
+    (with-temp-buffer
+      (setq magh-buffer-context base)
+      (cl-letf (((symbol-function 'magh-context-local-remotes)
+                 (lambda (_context) `(("origin" . ,base) ("fork" . ,fork))))
+                ((symbol-function 'magh-repo-status)
+                 (lambda (context) (setq opened context))))
+        (magh-repo-switch-remote "fork")))
+    (should (eq opened fork))))
+
 (ert-deftest magh-ui-late-generation-cannot-overwrite-newer-page ()
   (let ((magh-display-buffer-function (lambda (buffer) buffer))
         callbacks

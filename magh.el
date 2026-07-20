@@ -1,10 +1,12 @@
 ;;; magh.el --- Magit-like GitHub frontend powered by gh -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Version: 0.1.0
 ;; URL: https://github.com/roife/magh.el
+;; License: GPL-2.0-only
 ;; Keywords: tools, vc, github
 ;; Package-Requires: ((emacs "31.1") (magit "4.0.0") (consult "2.0")
 ;;                    (marginalia "1.0") (transient "0.7.0")

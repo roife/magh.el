@@ -1,6 +1,7 @@
 ;;; magh-ui.el --- Magit-section UI framework for magh.el -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github
@@ -117,6 +118,7 @@
   "Contextual Transient function for the current page.")
 (defvar-local magh-ui--generation 0)
 (defvar-local magh-ui--data nil)
+(defvar-local magh-ui--page-loading nil)
 
 (defun magh-ui--repository-context (&optional context)
   "Resolve CONTEXT or the current page's required repository context."
@@ -300,6 +302,7 @@ With FORCE non-nil (interactively, a prefix argument), bypass completed cache."
   (unless magh-buffer-refresh-function
     (user-error "This magh.el page has no refresh function"))
   (run-hooks 'magh-pre-refresh-hook)
+  (setq magh-ui--page-loading nil)
   (cl-incf magh-ui--generation)
   (let ((generation magh-ui--generation)
         (state (magh-ui--capture-state)))
@@ -316,6 +319,47 @@ With FORCE non-nil (interactively, a prefix argument), bypass completed cache."
          (magh-ui--render-error error state)
          (run-hooks 'magh-post-refresh-hook)))
      force)))
+
+(defun magh-ui--update-data (data)
+  "Replace the current page DATA and rerender while preserving point."
+  (let ((state (magh-ui--capture-state)))
+    (setq magh-ui--data data)
+    (magh-ui--replace magh-buffer-render-function data state)))
+
+(defun magh-ui--load-next-page (start &optional label)
+  "Append the next page returned by START to the current page.
+START receives the opaque continuation token plus success and error callbacks.
+LABEL names the resource in progress messages."
+  (unless (magh-page-p magh-ui--data)
+    (user-error "This page does not contain paginated data"))
+  (unless (magh-page-next magh-ui--data)
+    (user-error "No more results"))
+  (when magh-ui--page-loading
+    (user-error "Another page is already loading"))
+  (let ((buffer (current-buffer))
+        (page magh-ui--data)
+        (generation magh-ui--generation)
+        (next (magh-page-next magh-ui--data))
+        (label (or label "results")))
+    (setq magh-ui--page-loading t)
+    (message "Loading more %s…" label)
+    (funcall
+     start next
+     (lambda (continuation)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (when (and (= generation magh-ui--generation)
+                      (eq page magh-ui--data))
+             (setq magh-ui--page-loading nil)
+             (magh-ui--update-data (magh-page-append page continuation))
+             (message "Loaded %d %s"
+                      (length (magh-page-items magh-ui--data)) label)))))
+     (lambda (error)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (when (= generation magh-ui--generation)
+             (setq magh-ui--page-loading nil)
+             (magh-core--user-error error))))))))
 
 (defun magh-ui--refresh-if-page ()
   "Refresh the current buffer when it is a native magh.el page."
@@ -408,6 +452,13 @@ non-nil, runs in the page buffer after mode initialization."
   (let ((start (point)))
     (insert (if face (propertize text 'font-lock-face face) text) "\n")
     (add-text-properties start (point) (list 'magh-resource resource))))
+
+(defun magh-ui--insert-request-error (error)
+  "Insert a compact inline representation of request ERROR."
+  (insert (propertize (format "Unavailable: %s\n" (magh-error-message error))
+                      'font-lock-face 'magh-error)
+          (propertize "Press g to retry this page.\n"
+                      'font-lock-face 'shadow)))
 
 (defun magh-ui--styled (value face)
   "Return VALUE as text carrying FACE, or nil when VALUE is empty."

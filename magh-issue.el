@@ -1,6 +1,7 @@
 ;;; magh-issue.el --- Native Issue workflow for magh.el -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github
@@ -74,17 +75,22 @@
 
 (defun magh-issue--render-list (context state data)
   "Render Issue list DATA for CONTEXT and STATE."
-  (magh-ui--insert-header "Repository" (magh-context-repository context)
-                        'magh-repository
-                        (magh-resource-create 'repository context))
-  (magh-ui--insert-header "Issues" state)
-  (insert "\n")
-  (if data
-      (dolist (issue data) (magh-issue--insert-row context issue))
-    (insert (propertize "No matching issues.\n" 'font-lock-face 'shadow)))
-  (magh-ui--section (more 'more (magh-resource-create 'issue-more context) t)
-    (format "Load more (current limit %d)" magh-issue--limit)
-    (insert "Press RET to double the list limit.\n")))
+  (let ((items (if (magh-page-p data) (magh-page-items data) data))
+        (next (and (magh-page-p data) (magh-page-next data))))
+    (magh-ui--insert-header "Repository" (magh-context-repository context)
+                          'magh-repository
+                          (magh-resource-create 'repository context))
+    (magh-ui--insert-header "Issues" state)
+    (insert "\n")
+    (if items
+        (dolist (issue items) (magh-issue--insert-row context issue))
+      (insert (propertize "No matching issues.\n" 'font-lock-face 'shadow)))
+    (if next
+        (magh-ui--section (more 'more (magh-resource-create 'issue-more context) t)
+          (format "Load next page (%d loaded)" (length items))
+          (insert "Press RET to append more issues.\n"))
+      (insert (propertize (format "End of list (%d items).\n" (length items))
+                          'font-lock-face 'shadow)))))
 
 ;;;###autoload
 (defun magh-issue-list (&optional context state params)
@@ -96,9 +102,9 @@
     (magh-ui--open-page
      (magh-issue--buffer-name context) context 'issue-list state
      (lambda (success error force)
-       (magh-api--issue-list
+       (magh-api--issue-page
         context (append (list :state state :limit limit) params)
-        success error force))
+        nil success error force))
      (lambda (data) (magh-issue--render-list context state data))
      :setup
      (lambda ()
@@ -109,19 +115,18 @@
        (setq magh-buffer-dispatch-function #'magh-issue-dispatch)))))
 
 (defun magh-issue-load-more ()
-  "Double the current Issue list limit and refresh."
+  "Append the next page to the current Issue list."
   (interactive)
   (let ((context magh-buffer-context)
         (state magh-issue--state)
         (params magh-issue--params)
-        (limit (* 2 magh-issue--limit)))
-    (setq magh-issue--limit limit
-          magh-buffer-refresh-function
-          (lambda (success error force)
-            (magh-api--issue-list
-             context (append (list :state state :limit limit) params)
-             success error force)))
-    (magh-ui-refresh t)))
+        (limit magh-issue--limit))
+    (magh-ui--load-next-page
+     (lambda (cursor success error)
+       (magh-api--issue-page
+        context (append (list :state state :limit limit) params)
+        cursor success error))
+     "issues")))
 
 (defun magh-issue-cycle-state ()
   "Cycle Issue list state between open, closed, and all."

@@ -1,6 +1,7 @@
 ;;; magh-dispatch.el --- Top-level Transient menus for magh.el -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github

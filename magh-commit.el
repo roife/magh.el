@@ -1,6 +1,7 @@
 ;;; magh-commit.el --- Commit history and details for magh.el -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github
@@ -83,17 +84,24 @@
 
 (defun magh-commit--render-list (context params data)
   "Render commit list DATA using PARAMS."
-  (magh-ui--insert-header "Repository" (magh-context-repository context)
-                        'magh-repository (magh-resource-create 'repository context))
-  (magh-ui--insert-header "History"
-                        (or (plist-get params :path) (plist-get params :ref) "HEAD"))
-  (insert "\n")
-  (if data
-      (dolist (commit data) (magh-commit--insert-row context commit))
-    (insert (propertize "No commits found.\n" 'font-lock-face 'shadow)))
-  (magh-ui--section (more 'more (magh-resource-create 'commit-more context) t)
-    (format "Load more (current limit %d)" magh-commit--limit)
-    (insert "Press RET to double the history limit.\n")))
+  (let ((items (if (magh-page-p data) (magh-page-items data) data))
+        (next (and (magh-page-p data) (magh-page-next data))))
+    (magh-ui--insert-header "Repository" (magh-context-repository context)
+                          'magh-repository
+                          (magh-resource-create 'repository context))
+    (magh-ui--insert-header
+     "History" (or (plist-get params :path) (plist-get params :ref) "HEAD"))
+    (insert "\n")
+    (if items
+        (dolist (commit items) (magh-commit--insert-row context commit))
+      (insert (propertize "No commits found.\n" 'font-lock-face 'shadow)))
+    (if next
+        (magh-ui--section (more 'more (magh-resource-create 'commit-more context) t)
+          (format "Load next page (%d loaded)" (length items))
+          (insert "Press RET to append more commits.\n"))
+      (insert (propertize (format "End of history (%d commits).\n"
+                                  (length items))
+                          'font-lock-face 'shadow)))))
 
 ;;;###autoload
 (defun magh-commit-list (&optional context ref path)
@@ -108,23 +116,20 @@
      (magh-context-copy context :ref ref :path path) 'commit-list
      (format "%s:%s" ref path)
      (lambda (success error force)
-       (magh-api--commit-list context params success error force))
+       (magh-api--commit-page context params nil success error force))
      (lambda (data) (magh-commit--render-list context params data))
      :setup (lambda ()
               (setq magh-commit--params params magh-commit--limit magh-list-limit)))))
 
 (defun magh-commit-load-more ()
-  "Double the current commit history limit."
+  "Append the next page to the current commit history."
   (interactive)
-  (let* ((context magh-buffer-context)
-         (params (plist-put magh-commit--params
-                            :limit (* 2 magh-commit--limit))))
-    (setq magh-commit--limit (plist-get params :limit)
-          magh-commit--params params
-          magh-buffer-refresh-function
-          (lambda (success error force)
-            (magh-api--commit-list context params success error force)))
-    (magh-ui-refresh t)))
+  (let ((context magh-buffer-context)
+        (params magh-commit--params))
+    (magh-ui--load-next-page
+     (lambda (page success error)
+       (magh-api--commit-page context params page success error))
+     "commits")))
 
 ;;; Details
 

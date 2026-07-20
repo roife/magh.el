@@ -19,8 +19,10 @@ without leaving Emacs.
 
 ## Features
 
-- User and repository status pages with collapsible Magit sections
-- Native issue and pull request lists, detail pages, editing, and comments
+- User and repository status pages whose independent sections survive partial
+  request failures
+- Cursor-paginated issue and pull request lists, plus paginated commit history
+- Native issue and pull request detail pages, editing, and comments
 - Pull request review drafts, inline comments, threads, and review submission
 - GitHub Actions workflows, runs, jobs, steps, logs, reruns, and dispatch
 - Release creation, editing, generated notes, publishing, and asset downloads
@@ -85,6 +87,7 @@ Useful direct entry points include:
 | `magh-user-status` | Show account activity and assigned work |
 | `magh-repo-status` | Open the current repository workspace |
 | `magh-repo-status-other` | Select and open any repository |
+| `magh-repo-switch-remote` | Switch a local status page to another remote |
 | `magh-issue-list` | Browse issues |
 | `magh-pr-list` | Browse pull requests |
 | `magh-review-requests` | Show pull requests awaiting your review |
@@ -97,9 +100,11 @@ Useful direct entry points include:
 | `magh-command` | Run any `gh` command in an Emacs PTY |
 | `magh-api-request` | Call an arbitrary REST or GraphQL endpoint |
 
-Repository-scoped commands infer the current Git remote when possible and
-otherwise prompt for `OWNER/NAME`. Values in `magh-known-repositories` appear
-as completions in that prompt.
+Repository-scoped commands honor the current branch's push remote, Git's
+`remote.pushDefault`, and its tracking remote before falling back to `origin`.
+On a local repository status page, press `O` to switch to another GitHub
+remote. Commands otherwise prompt for `OWNER/NAME`; values in
+`magh-known-repositories` appear as completions in that prompt.
 
 Inside native resource pages, the usual Magit navigation applies: `TAB`
 expands or collapses a section, `RET` visits the resource at point, `n` and `p`
@@ -119,7 +124,7 @@ All options are available through `M-x customize-group RET magh`. For example:
 ;; Use a GitHub Enterprise host. Nil lets gh choose its authenticated default.
 (setq magh-host "github.example.com")
 
-;; Control list sizes and default filters.
+;; Control list page sizes and default filters.
 (setq magh-list-limit 50
       magh-default-issue-state "open"
       magh-default-pr-state "open")
@@ -185,3 +190,8 @@ candidates can open in its review interface:
 The Forge and emacs-pr-review bridges are mutually exclusive. Enabling
 `magh-forge-mode` disables `magh-pr-review-mode`, and enabling
 `magh-pr-review-mode` disables `magh-forge-mode`.
+
+## License
+
+`magh.el` is distributed under the GNU General Public License, version 2 only.
+See [LICENSE](LICENSE).

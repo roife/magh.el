@@ -1,6 +1,7 @@
 ;;; magh-client.el --- Asynchronous GitHub CLI transport -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github
@@ -71,14 +72,15 @@
       (setenv "GH_HOST" host))
     process-environment))
 
-(defun magh-client--cache-key (argv context json false-object)
-  "Build a cache key for ARGV, CONTEXT, and JSON parsing options."
+(defun magh-client--cache-key (argv context json false-object stdin)
+  "Build a cache key for ARGV, CONTEXT, parsing options, and STDIN."
   (list :account-generation magh-client--account-generation
         :host (magh-context-host context)
         :repository (magh-context-repository context)
         :ref (magh-context-ref context)
         :path (magh-context-path context)
         :output (if json (list 'json false-object) 'text)
+        :stdin (and stdin (secure-hash 'sha256 stdin))
         :argv argv))
 
 (defun magh-client--subscriber-live-p (subscriber)
@@ -230,7 +232,7 @@ JSON-FALSE-OBJECT controls the parsed representation of JSON false."
            :buffer (or source-buffer (current-buffer))))
          (cache-key (and (or cache dedupe)
                          (magh-client--cache-key
-                          argv context json json-false-object)))
+                          argv context json json-false-object stdin)))
          (inflight-key
           (if dedupe
               (list (if force 'force 'normal) cache-key)

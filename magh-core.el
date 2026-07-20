@@ -1,6 +1,7 @@
 ;;; magh-core.el --- Core types and configuration for magh.el -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github
@@ -35,7 +36,8 @@ parsed from a local Git remote takes precedence for that repository."
   :type '(choice (const :tag "GitHub CLI default" nil) string))
 
 (defcustom magh-list-limit 50
-  "Maximum number of items requested by ordinary resource lists."
+  "Number of items requested per resource-list page.
+GitHub APIs with a fixed maximum page size clamp this value to 100."
   :type 'natnum)
 
 (defcustom magh-default-issue-state "open"
@@ -185,15 +187,49 @@ When nil, use `default-directory'."
   "Report typed ERROR from an asynchronous command callback."
   (message "magh: %s" (magh-error-message error)))
 
+;;; Aggregate and pagination values
+
+(cl-defstruct (magh-batch-result
+               (:constructor magh-batch-result-create (&key values errors)))
+  "Values and errors collected from independent asynchronous requests."
+  values errors)
+
+(defun magh-batch-value (result key)
+  "Return successful KEY value from aggregate RESULT.
+Plain alists are accepted for compatibility with renderer callers."
+  (alist-get key (if (magh-batch-result-p result)
+                     (magh-batch-result-values result)
+                   result)))
+
+(defun magh-batch-error (result key)
+  "Return KEY error from aggregate RESULT, or nil."
+  (and (magh-batch-result-p result)
+       (alist-get key (magh-batch-result-errors result))))
+
+(cl-defstruct (magh-page
+               (:constructor magh-page-create (&key items next)))
+  "One page of ITEMS and an opaque NEXT continuation token."
+  items next)
+
+(defun magh-page-append (page continuation)
+  "Return PAGE with CONTINUATION items appended and its next token adopted."
+  (unless (and (magh-page-p page) (magh-page-p continuation))
+    (signal 'wrong-type-argument (list 'magh-page-p
+                                      (if (magh-page-p page)
+                                          continuation page))))
+  (magh-page-create :items (append (magh-page-items page)
+                                  (magh-page-items continuation))
+                    :next (magh-page-next continuation)))
+
 ;;; Context
 
 (cl-defstruct
     (magh-context
      (:constructor magh-context-create
-                   (&key host owner name repository root branch
+                   (&key host owner name repository root remote branch
                          default-branch ref path)))
   "Structured GitHub repository and navigation context."
-  host owner name repository root branch default-branch ref path)
+  host owner name repository root remote branch default-branch ref path)
 
 (defun magh-context-copy (context &rest overrides)
   "Copy CONTEXT and apply plist OVERRIDES to its slots."
@@ -205,6 +241,7 @@ When nil, use `default-directory'."
                   (:name (setf (magh-context-name copy) value))
                   (:repository (setf (magh-context-repository copy) value))
                   (:root (setf (magh-context-root copy) value))
+                  (:remote (setf (magh-context-remote copy) value))
                   (:branch (setf (magh-context-branch copy) value))
                   (:default-branch
                    (setf (magh-context-default-branch copy) value))
@@ -263,29 +300,97 @@ When nil, use `default-directory'."
           (let ((output (string-trim (buffer-string))))
             (unless (string-empty-p output) output)))))))
 
-(defun magh-core--local-context (&optional directory)
-  "Build a context from local Git metadata under DIRECTORY."
+(defun magh-core--git-remotes (root)
+  "Return local Git remote names configured in ROOT."
+  (split-string (or (magh-core--git-output root "remote") "") "\n" t))
+
+(defun magh-core--git-remote-url (root remote)
+  "Return fetch URL for REMOTE in ROOT."
+  (magh-core--git-output root "remote" "get-url" remote))
+
+(defun magh-core--preferred-remote (root branch &optional requested)
+  "Return the best GitHub REMOTE in ROOT for BRANCH.
+REQUESTED, when non-nil, is considered before Git's push and upstream
+configuration.  Remotes whose URLs cannot identify a GitHub repository are
+skipped."
+  (let* ((remotes (magh-core--git-remotes root))
+         (ordered
+          (delq nil
+                (append
+                 (list requested
+                       (and branch
+                            (magh-core--git-output
+                             root "config" "--get"
+                             (format "branch.%s.pushRemote" branch)))
+                       (magh-core--git-output
+                        root "config" "--get" "remote.pushDefault")
+                       (and branch
+                            (magh-core--git-output
+                             root "config" "--get"
+                             (format "branch.%s.remote" branch)))
+                       "origin")
+                 remotes)))
+         candidates)
+    ;; `delete-dups' retains later duplicates, which would invert the explicit
+    ;; priority above when a requested remote also occurs in REMOTES.
+    (dolist (candidate ordered)
+      (unless (member candidate candidates)
+        (setq candidates (append candidates (list candidate)))))
+    (cl-find-if
+     (lambda (remote)
+       (and (member remote remotes)
+            (magh-core--remote-components
+             (magh-core--git-remote-url root remote))))
+     candidates)))
+
+(defun magh-core--local-context (&optional directory remote)
+  "Build a context from local Git metadata under DIRECTORY.
+When REMOTE is non-nil, prefer that named Git remote."
   (when-let* ((root (magh-core--git-root directory)))
-    (let* ((remote-name
-            (or (magh-core--git-output root "config" "--get" "remote.pushDefault")
-                "origin"))
-           (remote
-            (or (magh-core--git-output root "config" "--get"
-                                     (format "remote.%s.url" remote-name))
-                (magh-core--git-output root "config" "--get" "remote.origin.url")))
-           (parts (magh-core--remote-components remote))
-           (branch (magh-core--git-output root "branch" "--show-current"))
-           (head (magh-core--git-output root "symbolic-ref" "--short"
-                                     "refs/remotes/origin/HEAD"))
-           (default-branch (and head (string-remove-prefix "origin/" head))))
+    (let* ((branch (magh-core--git-output root "branch" "--show-current"))
+           (remote-name (magh-core--preferred-remote root branch remote))
+           (remote-url (and remote-name
+                            (magh-core--git-remote-url root remote-name)))
+           (parts (magh-core--remote-components remote-url))
+           (head (and remote-name
+                      (magh-core--git-output
+                       root "symbolic-ref" "--short"
+                       (format "refs/remotes/%s/HEAD" remote-name))))
+           (default-branch
+            (and head
+                 (string-remove-prefix (concat remote-name "/") head))))
       (magh-context-normalize
        (magh-context-create :host (or (car parts) magh-host)
                           :owner (nth 1 parts)
                           :name (nth 2 parts)
                           :root root
+                          :remote remote-name
                           :branch branch
                           :default-branch default-branch
                           :ref (or branch default-branch))))))
+
+(defun magh-context-from-local-remote (directory remote)
+  "Create a local repository context for named REMOTE under DIRECTORY."
+  (let* ((root (magh-core--git-root directory))
+         (url (and root (member remote (magh-core--git-remotes root))
+                   (magh-core--git-remote-url root remote))))
+    (unless (and url (magh-core--remote-components url))
+      (signal 'magh-invalid-input
+              (list (format "Remote `%s' does not identify a GitHub repository"
+                            remote))))
+    (magh-core--local-context root remote)))
+
+(defun magh-context-local-remotes (&optional context)
+  "Return supported local Git remotes for CONTEXT as (NAME . CONTEXT) pairs."
+  (setq context (magh-context-resolve context))
+  (when-let* ((root (magh-context-root context)))
+    (delq nil
+          (mapcar
+           (lambda (remote)
+             (condition-case nil
+                 (cons remote (magh-context-from-local-remote root remote))
+               (magh-invalid-input nil)))
+           (magh-core--git-remotes root)))))
 
 (defun magh-context-from-repository (repository &optional host)
   "Create a context from REPOSITORY and optional HOST.
@@ -462,6 +567,37 @@ has succeeded.  ERRBACK is called at most once."
            (unless failed
              (setq failed t)
              (funcall errback error))))))))
+
+(defun magh-core--collect-async-settled (requests callback)
+  "Run independent asynchronous REQUESTS and call CALLBACK after all settle.
+REQUESTS has the same (KEY . START) shape as `magh-core--collect-async'.
+CALLBACK receives a `magh-batch-result'; one failed request does not discard
+successful sibling values."
+  (if (null requests)
+      (funcall callback (magh-batch-result-create))
+    (let ((remaining (length requests))
+          (outcomes (make-hash-table :test #'equal)))
+      (cl-labels
+          ((finish (key tag value)
+             (puthash key (cons tag value) outcomes)
+             (cl-decf remaining)
+             (when (zerop remaining)
+               (let (values errors)
+                 (dolist (request requests)
+                   (let* ((request-key (car request))
+                          (outcome (gethash request-key outcomes)))
+                     (if (eq (car outcome) :value)
+                         (push (cons request-key (cdr outcome)) values)
+                       (push (cons request-key (cdr outcome)) errors))))
+                 (funcall callback
+                          (magh-batch-result-create
+                           :values (nreverse values)
+                           :errors (nreverse errors)))))))
+        (dolist (request requests)
+          (let ((key (car request)))
+            (funcall (cdr request)
+                     (lambda (value) (finish key :value value))
+                     (lambda (error) (finish key :error error)))))))))
 
 (provide 'magh-core)
 ;;; magh-core.el ends here

@@ -1,6 +1,7 @@
 ;;; magh-repo.el --- Repository pages and management -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
+;; SPDX-License-Identifier: GPL-2.0-only
 
 ;; Author: magh.el contributors
 ;; Keywords: tools, vc, github
@@ -65,9 +66,9 @@
   (mouse-set-point event)
   (magh-ui-visit))
 
-(defun magh-repo--fetch-status (context success error force)
+(defun magh-repo--fetch-status (context success _error force)
   "Fetch repository status aggregates in CONTEXT."
-  (magh-core--collect-async
+  (magh-core--collect-async-settled
    (list
     (cons 'repository
           (lambda (ok fail) (magh-api--repo-get context ok fail force)))
@@ -96,7 +97,7 @@
              ok fail force)))
     (cons 'releases
           (lambda (ok fail) (magh-api--release-list context ok fail force))))
-   success error))
+   success))
 
 (defun magh-repo--topic-resource (kind context data)
   "Create a resource of KIND in CONTEXT from DATA."
@@ -269,69 +270,99 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
 
 (defun magh-repo--render-status (context result)
   "Render repository status RESULT in CONTEXT."
-  (let* ((repo (alist-get 'repository result))
-         (languages (alist-get 'languages result))
-         (branches (alist-get 'branches result))
-         (issues (alist-get 'issues result))
-         (prs (alist-get 'prs result))
-         (runs (alist-get 'runs result))
-         (commits (alist-get 'commits result))
-         (releases (seq-take (alist-get 'releases result) 5))
-         (repo-resource (magh-repo--resource repo context))
-         (name (alist-get 'nameWithOwner repo))
+  (let* ((repo (magh-batch-value result 'repository))
+         (languages (magh-batch-value result 'languages))
+         (branches (magh-batch-value result 'branches))
+         (issues (magh-batch-value result 'issues))
+         (prs (magh-batch-value result 'prs))
+         (runs (magh-batch-value result 'runs))
+         (commits (magh-batch-value result 'commits))
+         (releases (seq-take (magh-batch-value result 'releases) 5))
+         (name (or (alist-get 'nameWithOwner repo)
+                   (magh-context-repository context)))
+         (repo-resource
+          (magh-resource-create
+           'repository context :title name
+           :url (or (alist-get 'html_url repo) (alist-get 'url repo))
+           :data repo))
          (visibility (alist-get 'visibility repo))
          (permission (alist-get 'viewerPermission repo))
-         (viewer-forked (alist-get 'viewer-forked result))
-         (default-branch (magh-core--name (alist-get 'defaultBranchRef repo)))
+         (viewer-forked (magh-batch-value result 'viewer-forked))
+         (default-branch (or (magh-core--name (alist-get 'defaultBranchRef repo))
+                             (magh-context-default-branch context)))
          (current-ref (or (magh-context-ref context)
                           (magh-context-branch context)
                           default-branch)))
     (magh-ui--insert-header "Repository" name 'magh-repository repo-resource)
-    (magh-ui--insert-header "Visibility" (downcase visibility)
+    (magh-ui--insert-header "Remote" (magh-context-remote context)
+                          'magh-permission)
+    (magh-ui--insert-header "Visibility" (and visibility (downcase visibility))
                           'magh-permission)
     (magh-ui--insert-header "User" (and permission (format "(%s)" permission))
                           'magh-permission)
     (magh-ui--insert-header "Default branch" default-branch 'magh-branch)
     (magh-ui--insert-header "Branch" current-ref 'magh-branch)
-    (magh-ui--insert-header "Stats" (magh-repo--stats repo viewer-forked))
+    (when repo
+      (magh-ui--insert-header "Stats" (magh-repo--stats repo viewer-forked)))
     (insert "\n")
     (magh-ui--section (description 'description repo-resource nil)
       "Description"
-      (let ((description (alist-get 'description repo)))
-        (magh-ui--insert-markdown
-         (if (string-empty-p (string-trim (or description "")))
-             "No description."
-           description)
-         context)))
+      (if-let* ((error (magh-batch-error result 'repository)))
+          (magh-ui--insert-request-error error)
+        (let ((description (alist-get 'description repo)))
+          (magh-ui--insert-markdown
+           (if (string-empty-p (string-trim (or description "")))
+               "No description."
+             description)
+           context))))
+    (when-let* ((error (magh-batch-error result 'viewer-forked)))
+      (magh-ui--section (viewer-relationship 'viewer-relationship nil t)
+        "Viewer relationship"
+        (magh-ui--insert-request-error error)))
     (magh-ui--section (statistics 'statistics
                                 (magh-resource-create 'statistics context) t)
       "Statistics"
-      (magh-repo--insert-languages languages))
+      (if-let* ((error (magh-batch-error result 'languages)))
+          (magh-ui--insert-request-error error)
+        (magh-repo--insert-languages languages)))
     (magh-ui--section (branches 'branches nil nil)
       "Branches"
-      (dolist (item branches)
-        (magh-repo--insert-branch context item current-ref)))
+      (if-let* ((error (magh-batch-error result 'branches)))
+          (magh-ui--insert-request-error error)
+        (dolist (item branches)
+          (magh-repo--insert-branch context item current-ref))))
     (magh-ui--section (recent-commits 'recent-commits
                                     (magh-resource-create 'commit-list context) nil)
       "Recent commits"
-      (dolist (item commits) (magh-repo--insert-commit context item)))
+      (if-let* ((error (magh-batch-error result 'commits)))
+          (magh-ui--insert-request-error error)
+        (dolist (item commits) (magh-repo--insert-commit context item))))
     (magh-ui--section (pull-requests 'pull-requests
                                    (magh-resource-create 'pr-list context) nil)
       "Pull requests"
-      (dolist (item prs) (magh-repo--insert-topic 'pr context item)))
+      (if-let* ((error (magh-batch-error result 'prs)))
+          (magh-ui--insert-request-error error)
+        (dolist (item prs) (magh-repo--insert-topic 'pr context item))))
     (magh-ui--section (issues 'issues (magh-resource-create 'issue-list context) nil)
       "Issues"
-      (dolist (item issues) (magh-repo--insert-topic 'issue context item)))
+      (if-let* ((error (magh-batch-error result 'issues)))
+          (magh-ui--insert-request-error error)
+        (dolist (item issues) (magh-repo--insert-topic 'issue context item))))
     (magh-ui--section (actions 'actions (magh-resource-create 'run-list context) nil)
       "Actions"
-      (dolist (item runs) (magh-repo--insert-topic 'run context item)))
+      (if-let* ((error (magh-batch-error result 'runs)))
+          (magh-ui--insert-request-error error)
+        (dolist (item runs) (magh-repo--insert-topic 'run context item))))
     (magh-ui--section (releases 'releases
                               (magh-resource-create 'release-list context) t)
       "Releases"
-      (dolist (item releases) (magh-repo--insert-topic 'release context item)))))
+      (if-let* ((error (magh-batch-error result 'releases)))
+          (magh-ui--insert-request-error error)
+        (dolist (item releases) (magh-repo--insert-topic 'release context item))))))
 
 (defun magh-repo--setup-status-keys (context)
   "Install repository status navigation keys for CONTEXT."
+  (local-set-key (kbd "O") #'magh-repo-switch-remote)
   (local-set-key (kbd "i")
                  (lambda () (interactive)
                    (magh-resource-open (magh-resource-create 'issue-list context))))
@@ -377,6 +408,30 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
   "Prompt for REPOSITORY and open its status page."
   (interactive (list (read-string "Repository (OWNER/NAME): ")))
   (magh-repo-status (magh-context-from-repository repository)))
+
+;;;###autoload
+(defun magh-repo-switch-remote (&optional remote)
+  "Open Repo Status using another local Git REMOTE.
+Interactively, offer Git remotes whose URLs identify GitHub repositories."
+  (interactive)
+  (let* ((context (magh-ui--repository-context))
+         (root (magh-context-root context)))
+    (unless root
+      (user-error "This repository page is not backed by a local Git worktree"))
+    (let ((remotes (magh-context-local-remotes context)))
+      (unless remotes
+        (user-error "No local Git remote identifies a GitHub repository"))
+      (let* ((names (mapcar #'car remotes))
+             (selected
+              (or remote
+                  (completing-read
+                   "Git remote: " names nil t nil nil
+                   (and (member (magh-context-remote context) names)
+                        (magh-context-remote context)))))
+             (selected-context (cdr (assoc-string selected remotes))))
+        (unless selected-context
+          (user-error "Unknown GitHub remote: %s" selected))
+        (magh-repo-status selected-context)))))
 
 ;;; Lists
 
@@ -633,7 +688,8 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
   [["View"
     ("g" "Refresh" magh-ui-refresh)
     ("s" "Statistics" magh-statistics)
-    ("b" "Browse" magh-ui-browse)]
+    ("b" "Browse" magh-ui-browse)
+    ("O" "Switch remote" magh-repo-switch-remote)]
    ["Manage"
     ("E" "Settings" magh-repository-settings-edit)
     ("c" "Clone" magh-repository-clone)

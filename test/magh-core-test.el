@@ -60,6 +60,61 @@
               '((comments . (((id . 1)) ((id . 2))))))
              2)))
 
+(ert-deftest magh-core-settled-batch-keeps-successes-next-to-errors ()
+  (let ((failure (magh-core--error 'magh-api-error "Issues unavailable"))
+        result)
+    (magh-core--collect-async-settled
+     (list
+      (cons 'repository
+            (lambda (success _error)
+              (funcall success '((nameWithOwner . "o/r")))))
+      (cons 'issues
+            (lambda (_success error) (funcall error failure))))
+     (lambda (value) (setq result value)))
+    (should (magh-batch-result-p result))
+    (should (equal (magh-batch-value result 'repository)
+                   '((nameWithOwner . "o/r"))))
+    (should (equal (magh-batch-error result 'issues) failure))))
+
+(ert-deftest magh-core-pages-append-items-and-adopt-the-continuation ()
+  (let ((page (magh-page-append
+               (magh-page-create :items '(1 2) :next "old")
+               (magh-page-create :items '(3 4) :next "new"))))
+    (should (equal (magh-page-items page) '(1 2 3 4)))
+    (should (equal (magh-page-next page) "new"))))
+
+(ert-deftest magh-core-local-context-follows-and-can-switch-git-remotes ()
+  (skip-unless (executable-find "git"))
+  (let ((root (make-temp-file "magh-remotes-" t)))
+    (unwind-protect
+        (cl-labels
+            ((git (&rest args)
+               (let ((default-directory root))
+                 (should (zerop (apply #'process-file "git" nil nil nil args))))))
+          (git "init" "--quiet")
+          (git "symbolic-ref" "HEAD" "refs/heads/main")
+          (git "remote" "add" "origin"
+               "git@github.com:upstream/widgets.git")
+          (git "remote" "add" "fork"
+               "git@github.com:alice/widgets.git")
+          (git "symbolic-ref" "refs/remotes/origin/HEAD"
+               "refs/remotes/origin/main")
+          (git "symbolic-ref" "refs/remotes/fork/HEAD"
+               "refs/remotes/fork/trunk")
+          (git "config" "branch.main.remote" "fork")
+          (let ((inferred (magh-core--local-context root))
+                (origin (magh-context-from-local-remote root "origin")))
+            (should (equal (magh-context-remote inferred) "fork"))
+            (should (equal (magh-context-repository inferred) "alice/widgets"))
+            (should (equal (magh-context-default-branch inferred) "trunk"))
+            (should (equal (magh-context-remote origin) "origin"))
+            (should (equal (magh-context-repository origin)
+                           "upstream/widgets"))
+            (should (equal (magh-context-default-branch origin) "main"))
+            (should (equal (mapcar #'car (magh-context-local-remotes inferred))
+                           '("fork" "origin")))))
+      (delete-directory root t))))
+
 (ert-deftest magh-candidate-url-produces-structured-native-resources ()
   (let ((issue (magh-resource-from-url
                 "https://github.com/acme/widgets/issues/42"))
