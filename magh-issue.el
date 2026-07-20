@@ -27,26 +27,18 @@
 (defvar-local magh-issue--limit nil)
 (defvar-local magh-issue--dispatch-resource nil)
 
-(defun magh-issue--resource (context data)
-  "Create an Issue resource from DATA in CONTEXT."
-  (magh-topic--resource 'issue context data))
-
 (defun magh-issue--buffer-name (context &optional number)
   "Return Issue buffer name for CONTEXT and optional NUMBER."
   (if number
       (format "*magh: %s · Issue #%s*" (magh-context-repository context) number)
     (format "*magh: %s · Issues*" (magh-context-repository context))))
 
-(defun magh-issue--row-values (data)
-  "Return display plist for Issue DATA."
-  (magh-topic--row-values 'issue data))
-
 (defun magh-issue--insert-row (context data)
   "Insert a native Issue row from DATA."
-  (let* ((resource (magh-issue--resource context data))
+  (let* ((resource (magh-topic--resource 'issue context data))
          (number (plist-get resource :number)))
     (magh-ui--section (issue number resource t)
-      (magh-ui--format-row (magh-issue--row-values data))
+      (magh-ui--format-row (magh-topic--row-values 'issue data))
       (magh-topic--insert-metadata 'issue data :details t :created t))))
 
 (defun magh-issue--render-list (context state data)
@@ -120,7 +112,7 @@
 
 (defun magh-issue--render-view (context data)
   "Render Issue DATA in CONTEXT."
-  (let* ((resource (magh-issue--resource context data))
+  (let* ((resource (magh-topic--resource 'issue context data))
          (number (alist-get 'number data))
          (title (alist-get 'title data))
          (state (alist-get 'state data)))

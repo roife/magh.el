@@ -44,20 +44,12 @@
           (if number (format "PR #%s" number) "Pull requests")
           (if suffix (concat " · " suffix) "")))
 
-(defun magh-pr--resource (context data)
-  "Create Pull Request resource from DATA in CONTEXT."
-  (magh-topic--resource 'pr context data))
-
-(defun magh-pr--row-values (data)
-  "Return compact row values for Pull Request DATA."
-  (magh-topic--row-values 'pr data))
-
 (defun magh-pr--insert-row (context data)
   "Insert Pull Request DATA as a native section row."
-  (let* ((resource (magh-pr--resource context data))
+  (let* ((resource (magh-topic--resource 'pr context data))
          (number (plist-get resource :number)))
     (magh-ui--section (pr number resource t)
-      (magh-ui--format-row (magh-pr--row-values data)
+      (magh-ui--format-row (magh-topic--row-values 'pr data)
                            '(:state :review :identifier :title))
       (magh-topic--insert-metadata
        'pr data :details t :created t :review-placeholder "—"
@@ -293,7 +285,7 @@ Inline comments belonging to a submitted review are stored on that review as
          (reviews (or (alist-get 'reviews result) (alist-get 'reviews pr)))
          (inline-comments (alist-get 'review-comments result))
          (checks (alist-get 'statusCheckRollup pr))
-         (resource (magh-pr--resource context pr))
+         (resource (magh-topic--resource 'pr context pr))
          (number (alist-get 'number pr))
          (head-name (alist-get 'headRefName pr))
          (base-ref (alist-get 'baseRefName pr))
@@ -668,7 +660,7 @@ CALLBACK receives template text, or an empty string when no template exists."
                   (magh-context-from-repository
                    (alist-get 'nameWithOwner (alist-get 'repository item))
                    (magh-context-host context))))
-             (magh-pr--resource item-context item)))
+             (magh-topic--resource 'pr item-context item)))
          items)
         (lambda (item)
           (magh-ui--row
