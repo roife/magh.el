@@ -78,11 +78,25 @@ Supported members are `pr', `issue', and `run'."
   "w" #'magh-ui-copy-url
   "." #'magh-ui-dispatch)
 
+(defvar-keymap magh-magit-pr-list-section-map
+  :doc "Keymap for the Pull Request list section in Magit status."
+  :parent magit-section-mode-map
+  "RET" #'magh-ui-visit
+  "<mouse-1>" #'magh-magit-visit-at-mouse)
+
+(defun magh-magit-visit-at-mouse (event)
+  "Visit the GitHub resource clicked by mouse EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (magh-ui-visit))
+
 ;; `magit-section' discovers maps through these names.
 (defvar magit-magh-pr-section-map magh-magit-resource-section-map)
 (defvar magit-magh-issue-section-map magh-magit-resource-section-map)
 (defvar magit-magh-run-section-map magh-magit-resource-section-map)
 (defvar magit-magh-topic-section-map magh-magit-resource-section-map)
+(defvar magit-magh-pull-requests-section-map
+  magh-magit-pr-list-section-map)
 
 (defun magh-magit--effective-sections ()
   "Return enabled sections after optional Forge duplicate suppression."
@@ -317,7 +331,11 @@ When FORCE is non-nil, bypass the shared query cache."
                           items)))
            (other (seq-difference items current #'equal)))
       (magh-ui--ensure-section-gap)
-      (magit-insert-section (magh-pull-requests)
+      (magit-insert-section
+          (magh-pull-requests
+           (magh-section-value-create
+            :key 'open
+            :resource (magh-resource-create 'pr-list context)))
         (magit-insert-heading "Open Pull Requests")
         (magit-insert-section-body
           (if current
