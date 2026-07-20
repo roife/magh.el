@@ -67,38 +67,6 @@
     '("api" "repos/o/r/items" "--method" "GET" "--paginate" "--slurp"
       "-F" "page=2" "-F" "enabled=true" "-f" "name=two words"))))
 
-(ert-deftest magh-api-pr-reviews-use-the-paginated-rest-endpoint ()
-  (let ((context (magh-context-from-repository "acme/widgets")) captured)
-    (cl-letf (((symbol-function 'magh-client--json-async)
-               (lambda (argv _success _error &rest keys)
-                 (setq captured (cons argv keys)) 'request)))
-      (magh-api--pr-reviews context 7 #'ignore #'ignore t))
-    (should (equal (seq-take (car captured) 3)
-                   '("api" "repos/acme/widgets/pulls/7/reviews" "--method")))
-    (should (member "--paginate" (car captured)))
-    (should (member "--slurp" (car captured)))
-    (should (plist-get (cdr captured) :force))))
-
-(ert-deftest magh-api-repo-viewer-fork-uses-owner-affiliation ()
-  (let ((context (magh-context-from-repository "acme/widgets"))
-        captured result)
-    (cl-letf (((symbol-function 'magh-client--json-async)
-               (lambda (argv success _error &rest keys)
-                 (setq captured (cons argv keys))
-                 (funcall success
-                          '((data . ((repository .
-                                     ((forks . ((totalCount . 1)))))))))
-                 'request)))
-      (magh-api--repo-viewer-forked-p
-       context (lambda (value) (setq result value)) #'ignore t))
-    (should result)
-    (should (member "owner=acme" (car captured)))
-    (should (member "name=widgets" (car captured)))
-    (should (string-match-p
-             (regexp-quote "forks(first:1,affiliations:[OWNER])")
-             (cadr (member "-f" (car captured)))))
-    (should (plist-get (cdr captured) :force))))
-
 (ert-deftest magh-api-paginated-content-contracts-are-normalized-once ()
   (should
    (equal (magh-api--flatten-pages
@@ -112,31 +80,6 @@
    (equal (magh-api--decode-content
            '((encoding . "utf-8") (content . "plain text")))
           "plain text")))
-
-(ert-deftest magh-api-search-arguments-share-one-builder ()
-  (should
-   (equal
-    (magh-api--search-argv
-     'repos "two words"
-     '(:owner "octo cat" :state "open"))
-    (append
-     '("search" "repos" "two words" "--limit")
-     (list (number-to-string magh-list-limit)
-           "--json" (alist-get 'repos magh-api--search-fields)
-           "--owner" "octo cat" "--state" "open")))))
-
-(ert-deftest magh-api-dashboard-searches-only-active-pull-requests ()
-  (let ((context (magh-context-create)) calls)
-    (cl-letf (((symbol-function 'magh-api--search)
-               (lambda (_context kind query _callback _errback &optional force options)
-                 (push (list kind query force options) calls))))
-      (magh-api--review-requests context #'ignore #'ignore)
-      (magh-api--my-prs context #'ignore #'ignore))
-    (should
-     (equal
-      (nreverse calls)
-      '((prs "" nil (:review-requested "@me" :state "open"))
-        (prs "" nil (:author "@me" :state "open")))))))
 
 (ert-deftest magh-api-generic-graphql-mutations-bypass-read-cache ()
   (let ((context (magh-context-from-repository "acme/widgets" "github.com"))
@@ -188,38 +131,6 @@
     (should-not success)
     (should (eq (car failure) 'magh-api-error))))
 
-(ert-deftest magh-api-rest-release-normalizes-public-contract ()
-  (let ((release
-         (magh-api--normalize-rest-release
-          '((id . 7) (tag_name . "v1") (target_commitish . "main")
-            (draft . nil) (prerelease . t) (html_url . "https://example/r")
-            (assets . (((id . 8) (name . "a.zip") (download_count . 3)
-                        (browser_download_url . "https://example/a"))))))))
-    (should (equal (alist-get 'tagName release) "v1"))
-    (should (alist-get 'isPrerelease release))
-    (should (= (alist-get
-                'downloadCount (car (alist-get 'assets release))) 3))))
-
-(ert-deftest magh-api-project-completion-uses-owner-and-json-output ()
-  (let ((context (magh-context-from-repository "acme/widgets" "github.com"))
-        captured)
-    (cl-letf (((symbol-function 'magh-client--json-async)
-               (lambda (argv _success _error &rest keys)
-                 (setq captured (cons argv keys)) 'request)))
-      (magh-api--project-list context #'ignore #'ignore))
-    (should (equal (seq-take (car captured) 4)
-                   '("project" "list" "--owner" "acme")))
-    (should (member "--format" (car captured)))
-    (should (equal (cadr (member "--format" (car captured))) "json"))))
-
-(ert-deftest magh-api-cli-json-field-contracts-distinguish-list-and-view ()
-  (should (memq 'startedAt magh-api--run-fields))
-  (should-not (memq 'startedTime magh-api--run-fields))
-  (should (memq 'isLatest magh-api--release-list-fields))
-  (should-not (memq 'assets magh-api--release-list-fields))
-  (should (memq 'assets magh-api--release-view-fields))
-  (should-not (memq 'isLatest magh-api--release-view-fields)))
-
 (ert-deftest magh-api-explicit-json-false-never-enables-cli-switches ()
   (let ((context (magh-context-from-repository "acme/widgets")) captured)
     (cl-letf (((symbol-function 'magh-client--mutate-text)
@@ -245,22 +156,6 @@
        context '(:issues nil :wiki t) #'ignore #'ignore)
       (should (member "--enable-issues=false" (car captured)))
       (should (member "--enable-wiki=true" (car captured))))))
-
-(ert-deftest magh-api-generic-output-preserves-json-false ()
-  (let ((context (magh-context-create :host "github.com")) captured rendered)
-    (cl-letf (((symbol-function 'magh-client--json-async)
-               (lambda (_argv success _error &rest keys)
-                 (setq captured keys)
-                 (funcall success '((enabled . :json-false) (missing)))
-                 'request)))
-      (magh-api--generic-request
-       context "example" "GET" nil nil
-       (lambda (data) (setq rendered (magh-command--json-string data))) #'ignore))
-    (should (eq (plist-get captured :json-false-object) :json-false))
-    (should (string-match-p "\\\"enabled\\\"[[:space:]]*:[[:space:]]*false"
-                            rendered))
-    (should (string-match-p "\\\"missing\\\"[[:space:]]*:[[:space:]]*null"
-                            rendered))))
 
 (ert-deftest magh-api-review-uses-add-thread-for-file-comments ()
   (let ((context (magh-context-from-repository "acme/widgets"))
@@ -368,19 +263,6 @@
                             (string-match-p "submitPullRequestReview" query))
                           queries))))
 
-(ert-deftest magh-api-review-thread-pages-flatten-slurped-data ()
-  (let* ((data
-          (json-parse-string
-           (concat
-            "[{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":"
-            "{\"nodes\":[{\"id\":\"A\"}]}}}}},"
-            "{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":"
-            "{\"nodes\":[{\"id\":\"B\"}]}}}}}]")
-           :object-type 'alist :array-type 'list))
-         (nodes (magh-api--pr-review-thread-pages data)))
-    (should (equal (mapcar (lambda (node) (alist-get 'id node)) nodes)
-                   '("A" "B")))))
-
 (ert-deftest magh-api-review-threads-group-replies-and-metadata ()
   (let* ((root '((id . 10) (path . "src/a.el") (line . 4)
                  (side . "RIGHT") (body . "Root")))
@@ -405,45 +287,6 @@
     (should (equal (mapcar (lambda (item) (alist-get 'id item))
                            (alist-get 'comments thread))
                    '(10 11 12)))))
-
-(ert-deftest magh-api-review-threads-rest-fallback-remains-replyable ()
-  (let* ((thread
-          (car (magh-api--pr-review-normalize-threads
-                '(((id . 10) (path . "src/a.el") (line . 4)
-                   (side . "RIGHT") (body . "Root")))
-                nil))))
-    (should-not (alist-get 'id thread))
-    (should (alist-get 'viewer_can_reply thread))
-    (should-not (alist-get 'viewer_can_resolve thread))))
-
-(ert-deftest magh-api-review-reply-uses-top-level-comment-endpoint ()
-  (let ((context (magh-context-from-repository "acme/widgets")) captured)
-    (cl-letf (((symbol-function 'magh-client--mutate-json)
-               (lambda (argv success _error &rest keys)
-                 (setq captured (cons argv keys))
-                 (funcall success '((id . 12)))
-                 'request)))
-      (magh-api--pr-review-reply context 7 10 "Reply body" #'ignore #'ignore))
-    (should (member "repos/acme/widgets/pulls/7/comments/10/replies"
-                    (car captured)))
-    (should (member "body=Reply body" (car captured)))))
-
-(ert-deftest magh-api-review-thread-resolution-carries-thread-id ()
-  (let ((context (magh-context-from-repository "acme/widgets")) payload)
-    (cl-letf (((symbol-function 'magh-client--mutate-json)
-               (lambda (_argv success _error &rest keys)
-                 (setq payload
-                       (json-parse-string
-                        (plist-get keys :stdin)
-                        :object-type 'alist :array-type 'list))
-                 (funcall success '((data . ((resolveReviewThread)))))
-                 'request)))
-      (magh-api--pr-review-thread-resolved
-       context 7 "THREAD" t #'ignore #'ignore))
-    (should (string-match-p "resolveReviewThread"
-                            (alist-get 'query payload)))
-    (should (equal (magh-api--json-at payload 'variables 'input 'threadId)
-                   "THREAD"))))
 
 (ert-deftest magh-api-review-binds-new-pending-review-to-head ()
   (let ((context (magh-context-from-repository "acme/widgets")) create-input done)

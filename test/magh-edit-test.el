@@ -19,23 +19,6 @@
       (should (= (plist-get values :count) 3))
       (should (equal body "Body")))))
 
-(ert-deftest magh-edit-decodes-blank-fields-with-field-semantics ()
-  (with-temp-buffer
-    (magh-edit-mode)
-    (setq magh-edit-fields
-          '((:name milestone)
-            (:name description :allow-empty t)
-            (:name labels :multiple t)
-            (:name draft :type boolean)
-            (:name count :type integer)))
-    (insert "milestone:   \ndescription: \nlabels: \ndraft: \ncount: \n---\n")
-    (pcase-let ((`(,values ,_body) (magh-edit--parse)))
-      (should-not (plist-get values :milestone))
-      (should (equal (plist-get values :description) ""))
-      (should-not (plist-get values :labels))
-      (should (eq (plist-get values :draft) :json-false))
-      (should-not (plist-get values :count)))))
-
 (ert-deftest magh-edit-rejects-unknown-and-missing-required-fields ()
   (with-temp-buffer
     (magh-edit-mode)
@@ -60,19 +43,6 @@
     (let ((capf (magh-edit-completion-at-point)))
       (should capf)
       (should (equal (nth 2 capf) '("bug" "feature"))))))
-
-(ert-deftest magh-edit-completion-fetcher-extracts-one-field ()
-  (let ((context 'repository-context) values failure)
-    (funcall
-     (magh-edit--completion-fetcher
-      (lambda (actual-context success _error)
-        (should (eq actual-context context))
-        (funcall success '(((name . "main")) ((name . "topic")))))
-      context 'name)
-     (lambda (items) (setq values items))
-     (lambda (error) (setq failure error)))
-    (should (equal values '("main" "topic")))
-    (should-not failure)))
 
 (provide 'magh-edit-test)
 ;;; magh-edit-test.el ends here

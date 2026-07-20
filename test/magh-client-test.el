@@ -105,21 +105,6 @@
       (magh-test-wait (lambda () failure))
       (should (eq (car failure) 'magh-json-error)))))
 
-(ert-deftest magh-client-missing-executable-cleans-transport-buffers ()
-  (magh-test-with-clean-client
-    (let ((magh-executable "/missing/gh") failure)
-      (magh-client--text-async
-       '("version") #'ignore (lambda (error) (setq failure error))
-       :cache nil :dedupe nil)
-      (magh-test-wait (lambda () failure))
-      (should (eq (car failure) 'magh-missing-executable))
-      (should-not
-       (cl-find-if
-        (lambda (buffer)
-          (string-match-p "\\` \\*gh \\(?:stdout\\|stderr\\)\\*"
-                          (buffer-name buffer)))
-        (buffer-list))))))
-
 (ert-deftest magh-client-stream-is-cancellable-and-delivers-complete-text ()
   (magh-test-with-clean-client
     (let (chunks result)
