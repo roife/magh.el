@@ -8,11 +8,13 @@
 
 ;;; Commentary:
 
-;; Native workflow/run/job/step pages and asynchronous logs, watch, dispatch,
-;; enable, disable, rerun, job rerun, and cancellation.
+;; Native workflow/run/job/step/artifact pages and asynchronous logs, watch,
+;; dispatch, downloads, deletion, enable, disable, rerun, and cancellation.
 
 ;;; Code:
 
+(require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'transient)
 (require 'magh-api)
@@ -22,6 +24,10 @@
 (defvar-local magh-actions--dispatch-resource nil)
 (defvar-local magh-actions--run-id nil)
 (defvar-local magh-actions--workflow-id nil)
+
+(defun magh-actions--run-data (data)
+  "Return Run data from aggregate DATA or DATA itself."
+  (or (magh-batch-value data 'run) data))
 
 (defun magh-actions--run-resource (context data)
   "Create Run resource from DATA."
@@ -114,9 +120,50 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
              (magh-ui--styled (alist-get 'name step)
                             'magh-resource-title))))))))
 
-(defun magh-actions--render-run (context data)
-  "Render workflow Run DATA."
-  (let* ((resource (magh-actions--run-resource context data))
+(defun magh-actions--artifact-resource (context run-id data)
+  "Create an artifact resource for DATA produced by RUN-ID."
+  (magh-resource-create
+   'artifact context :id (alist-get 'id data) :run-id run-id
+   :title (alist-get 'name data) :name (alist-get 'name data)
+   :expired (magh-api--true-p (alist-get 'expired data)) :data data))
+
+(defun magh-actions--insert-artifact (context run-id data)
+  "Insert artifact DATA produced by RUN-ID."
+  (let* ((resource (magh-actions--artifact-resource context run-id data))
+         (expired (plist-get resource :expired))
+         (size (alist-get 'size_in_bytes data)))
+    (magh-ui--section (artifact (plist-get resource :id) resource t)
+      (magh-ui--row
+       (magh-ui--styled (if expired "EXPIRED" "AVAILABLE")
+                        (if expired 'magh-draft-state 'magh-open-state))
+       (magh-ui--styled (plist-get resource :name) 'magh-resource-title))
+      (magh-ui--insert-header
+       "Size" (and size (file-size-human-readable size)))
+      (magh-ui--insert-header
+       "Created" (magh-core--date (alist-get 'created_at data)) 'magh-date)
+      (magh-ui--insert-header
+       "Expires" (magh-core--date (alist-get 'expires_at data)) 'magh-date)
+      (magh-ui--insert-header "Digest" (alist-get 'digest data) 'magh-hash))))
+
+(defun magh-actions--render-artifacts (context run-id result)
+  "Render artifacts from aggregate RESULT for RUN-ID."
+  (magh-ui--section (artifacts 'artifacts nil nil)
+    "Artifacts"
+    (if-let* ((error (magh-batch-error result 'artifacts)))
+        (magh-ui--insert-request-error error)
+      (let ((artifacts (magh-batch-value result 'artifacts)))
+        (if artifacts
+            (dolist (artifact artifacts)
+              (magh-actions--insert-artifact context run-id artifact))
+          (insert (propertize "No artifacts for this run.\n"
+                              'font-lock-face 'shadow)))))))
+
+(defun magh-actions--render-run (context result)
+  "Render workflow Run aggregate RESULT."
+  (if-let* ((error (magh-batch-error result 'run)))
+      (magh-ui--insert-request-error error)
+    (let* ((data (magh-actions--run-data result))
+           (resource (magh-actions--run-resource context data))
          (id (plist-get resource :id))
          (state (magh-actions--run-state data))
          (workflow-resource
@@ -158,7 +205,20 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
                           'magh-date)
     (insert "\n")
     (dolist (job (alist-get 'jobs data))
-      (magh-actions--render-job context id job))))
+        (magh-actions--render-job context id job))
+      (insert "\n")
+      (magh-actions--render-artifacts context id result))))
+
+(defun magh-actions--fetch-run (context id success _error force)
+  "Fetch Run ID and its artifacts concurrently.
+Artifact failure is retained for inline rendering."
+  (magh-core--collect-async-settled
+   (list
+    (cons 'run (lambda (ok fail)
+                 (magh-api--run-get context id ok fail force)))
+    (cons 'artifacts (lambda (ok fail)
+                       (magh-api--artifact-list context id ok fail force))))
+   success))
 
 (defun magh-actions--setup-run (context id)
   "Install Run detail keys for CONTEXT and ID."
@@ -182,7 +242,7 @@ When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
      (format "*magh: %s · Run %s*" (magh-context-repository context) id))
    context 'run id
    (lambda (success error force)
-     (magh-api--run-get context id success error force))
+     (magh-actions--fetch-run context id success error force))
    (lambda (data) (magh-actions--render-run context data))
    :preview preview :setup (lambda () (magh-actions--setup-run context id))))
 
@@ -410,7 +470,8 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
          (job-id (or job-id (and (eq (plist-get resource :kind) 'job)
                                   (plist-get resource :id)))))
     (unless job-id
-      (let* ((run (and (eq magh-buffer-resource-kind 'run) magh-ui--data))
+      (let* ((run (and (eq magh-buffer-resource-kind 'run)
+                       (magh-actions--run-data magh-ui--data)))
              (jobs (and run (alist-get 'jobs run)))
              (choices (mapcar (lambda (job)
                                 (cons (alist-get 'name job) job)) jobs))
@@ -435,6 +496,119 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
      context id (lambda (_) (message "Cancelled run %s" id)
                   (magh-ui--refresh-if-page))
      #'magh-core--user-error)))
+
+(defun magh-actions--artifacts ()
+  "Return artifacts currently loaded in a Run page."
+  (and (magh-batch-result-p magh-ui--data)
+       (magh-batch-value magh-ui--data 'artifacts)))
+
+(defun magh-actions--artifact-selection (artifacts)
+  "Return selected artifact names from ARTIFACTS, or nil for all."
+  (let* ((choices
+          (mapcar (lambda (artifact)
+                    (cons (format "%s%s"
+                                  (alist-get 'name artifact)
+                                  (if (magh-api--true-p
+                                       (alist-get 'expired artifact))
+                                      " (expired)" ""))
+                          artifact))
+                  artifacts))
+         (selected
+          (completing-read-multiple
+           "Artifacts (empty means all): " choices nil t)))
+    (unless (null selected)
+      (delq nil
+            (mapcar (lambda (choice)
+                      (alist-get 'name (cdr (assoc choice choices))))
+                    selected)))))
+
+;;;###autoload
+(defun magh-run-artifact-download
+    (&optional context run-id names directory)
+  "Download and extract NAMES from RUN-ID into DIRECTORY.
+An empty NAMES selection downloads all non-expired artifacts."
+  (interactive)
+  (setq context (magh-ui--repository-context
+                 (or context
+                     (plist-get magh-actions--dispatch-resource :context)))
+        run-id (or run-id magh-actions--run-id
+                   (plist-get magh-actions--dispatch-resource :run-id)
+                   (plist-get magh-actions--dispatch-resource :id)
+                   (read-number "Run ID: ")))
+  (let* ((point-resource (magh-ui-resource-at-point))
+         (selected-resource
+          (if (eq (plist-get point-resource :kind) 'artifact)
+              point-resource
+            magh-actions--dispatch-resource))
+         (artifacts (magh-actions--artifacts))
+         (point-name (and (eq (plist-get selected-resource :kind) 'artifact)
+                          (plist-get selected-resource :name))))
+    (setq names (or names (and point-name (list point-name))
+                    (magh-actions--artifact-selection artifacts))
+          directory
+          (or directory
+              (read-directory-name "Download artifacts to: "
+                                   (or magh-download-directory
+                                       default-directory))))
+    (when (and (magh-batch-result-p magh-ui--data)
+               (magh-batch-error magh-ui--data 'artifacts))
+      (user-error "Artifacts are unavailable; refresh the Run page first"))
+    (when (and (magh-batch-result-p magh-ui--data) (null artifacts))
+      (user-error "This run has no artifacts"))
+    (let* ((selected
+            (if names
+                (cl-remove-if-not
+                 (lambda (artifact)
+                   (member (alist-get 'name artifact) names))
+                 artifacts)
+              artifacts))
+           (expired
+            (seq-filter (lambda (artifact)
+                          (magh-api--true-p (alist-get 'expired artifact)))
+                        selected)))
+      (when (and names expired)
+        (user-error "Expired artifacts cannot be downloaded"))
+      ;; `gh run download' has no explicit "skip expired" switch.  For an
+      ;; all-artifacts request, name every available artifact when expired
+      ;; entries exist so the CLI never attempts to fetch them.
+      (when (and (null names) expired)
+        (setq names
+              (mapcar (lambda (artifact) (alist-get 'name artifact))
+                      (seq-difference selected expired #'eq)))
+        (unless names (user-error "All artifacts in this run have expired"))))
+    (make-directory directory t)
+    (magh-api--artifact-download
+     context run-id names directory
+     (lambda (_)
+       (message "Downloaded artifacts to %s" directory)
+       (dired directory))
+     #'magh-core--user-error)))
+
+;;;###autoload
+(defun magh-run-artifact-delete (&optional context run-id artifact-id)
+  "Delete ARTIFACT-ID from RUN-ID after confirmation."
+  (interactive)
+  (let* ((point-resource (magh-ui-resource-at-point))
+         (resource (if (eq (plist-get point-resource :kind) 'artifact)
+                       point-resource
+                     (or magh-actions--dispatch-resource point-resource))))
+    (setq context (magh-ui--repository-context
+                   (or context (plist-get resource :context)))
+          run-id (or run-id (plist-get resource :run-id)
+                     magh-actions--run-id)
+          artifact-id (or artifact-id
+                          (and (eq (plist-get resource :kind) 'artifact)
+                               (plist-get resource :id))))
+    (unless artifact-id (user-error "No artifact selected"))
+    (when (magh-core--confirm
+           (format "Delete artifact %s? "
+                   (or (plist-get resource :name) artifact-id)))
+      (magh-api--artifact-delete
+       context run-id artifact-id
+       (lambda (_)
+         (message "Deleted artifact %s" artifact-id)
+         (magh-ui--refresh-if-page))
+       #'magh-core--user-error))))
 
 (defun magh-workflow-toggle (&optional disable context workflow)
   "Enable WORKFLOW, or DISABLE with prefix argument."
@@ -475,6 +649,9 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
     ("l" "Log" magh-run-log)
     ("w" "Watch" magh-run-watch)
     ("b" "Browse" magh-ui-browse)]
+   ["Artifacts"
+    ("d" "Download" magh-run-artifact-download)
+    ("D" "Delete" magh-run-artifact-delete)]
    ["Mutate"
     ("r" "Rerun" magh-run-rerun)
     ("j" "Rerun job" magh-run-rerun-job)
@@ -526,6 +703,18 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
               (magh-run-log (plist-get resource :context)
                           (plist-get resource :run-id)
                           (plist-get resource :id))))
+
+(magh-candidate-register
+ 'artifact
+ :open (lambda (resource)
+         (when (plist-get resource :expired)
+           (user-error "Expired artifacts cannot be downloaded"))
+         (magh-run-artifact-download
+          (plist-get resource :context) (plist-get resource :run-id)
+          (list (plist-get resource :name))))
+ :dispatch (lambda (resource)
+             (setq magh-actions--dispatch-resource resource)
+             (call-interactively #'magh-run-dispatch)))
 
 (provide 'magh-actions)
 ;;; magh-actions.el ends here

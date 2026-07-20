@@ -85,6 +85,82 @@
     isPrerelease name publishedAt tagName tarballUrl targetCommitish uploadUrl
     url zipballUrl))
 
+(defconst magh-api--project-fields-query
+  (concat
+   "query($id:ID!){node(id:$id){... on ProjectV2{fields(first:100){"
+   "totalCount nodes{__typename "
+   "... on ProjectV2Field{id name dataType} "
+   "... on ProjectV2SingleSelectField{id name dataType options{id name}} "
+   "... on ProjectV2IterationField{id name dataType configuration{"
+   "iterations{id title startDate duration} "
+   "completedIterations{id title startDate duration}}}}}}}}")
+  "GraphQL query for editable Project field metadata.")
+
+(defconst magh-api--discussion-page-query
+  (concat
+   "query($owner:String!,$name:String!,$first:Int!,$after:String,$categoryId:ID){"
+   "repository(owner:$owner,name:$name){discussions(first:$first,after:$after,"
+   "categoryId:$categoryId,orderBy:{field:UPDATED_AT,direction:DESC}){"
+   "totalCount nodes{id number title body url createdAt updatedAt closed isAnswered "
+   "author{login} category{id name emoji} comments{totalCount}}"
+   "pageInfo{hasNextPage endCursor}}}}")
+  "GraphQL query for one cursor-paginated Discussion page.")
+
+(defconst magh-api--discussion-query
+  (concat
+   "query($owner:String!,$name:String!,$number:Int!){"
+   "repository(owner:$owner,name:$name){discussion(number:$number){"
+   "id number title body url createdAt updatedAt closed closedAt isAnswered "
+   "viewerCanClose viewerCanReopen viewerCanUpdate author{login} "
+   "category{id name emoji isAnswerable} answer{id url} "
+   "comments(first:100){totalCount nodes{id databaseId body url createdAt updatedAt "
+   "isAnswer viewerCanMarkAsAnswer viewerCanUnmarkAsAnswer author{login} "
+   "replies(first:100){totalCount nodes{id databaseId body url createdAt updatedAt "
+   "author{login}}}}}}}}")
+  "GraphQL query for a Discussion and its bounded comment tree.")
+
+(defconst magh-api--discussion-categories-query
+  (concat
+   "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){"
+   "id discussionCategories(first:100){nodes{id name emoji description "
+   "isAnswerable}}}}")
+  "GraphQL query for Discussion creation metadata.")
+
+(defconst magh-api--discussion-create-mutation
+  (concat
+   "mutation($input:CreateDiscussionInput!){createDiscussion(input:$input){"
+   "discussion{id number title url}}}"))
+
+(defconst magh-api--discussion-update-mutation
+  (concat
+   "mutation($input:UpdateDiscussionInput!){updateDiscussion(input:$input){"
+   "discussion{id number title url}}}"))
+
+(defconst magh-api--discussion-comment-mutation
+  (concat
+   "mutation($input:AddDiscussionCommentInput!){"
+   "addDiscussionComment(input:$input){comment{id databaseId url}}}"))
+
+(defconst magh-api--discussion-close-mutation
+  (concat
+   "mutation($input:CloseDiscussionInput!){closeDiscussion(input:$input){"
+   "discussion{id number closed}}}"))
+
+(defconst magh-api--discussion-reopen-mutation
+  (concat
+   "mutation($input:ReopenDiscussionInput!){reopenDiscussion(input:$input){"
+   "discussion{id number closed}}}"))
+
+(defconst magh-api--discussion-mark-answer-mutation
+  (concat
+   "mutation($input:MarkDiscussionCommentAsAnswerInput!){"
+   "markDiscussionCommentAsAnswer(input:$input){discussion{id number isAnswered}}}"))
+
+(defconst magh-api--discussion-unmark-answer-mutation
+  (concat
+   "mutation($input:UnmarkDiscussionCommentAsAnswerInput!){"
+   "unmarkDiscussionCommentAsAnswer(input:$input){discussion{id number isAnswered}}}"))
+
 (defun magh-api--fields (fields)
   "Return comma-separated JSON FIELDS."
   (mapconcat #'symbol-name fields ","))
@@ -387,16 +463,202 @@ HEADERS is a list of complete header strings."
    callback errback :force force :transform #'magh-api--flatten-pages
    :domain (magh-api--domain context 'collaborator)))
 
-(defun magh-api--project-list (context callback errback &optional force)
-  "Fetch Projects owned by the repository owner in CONTEXT."
-  (setq context (magh-api--context context t))
+(defun magh-api--project-owner (context &optional owner)
+  "Return explicit OWNER, CONTEXT owner, or the current account marker."
+  (or owner (magh-context-owner context) "@me"))
+
+(defun magh-api--project-domains (context owner &optional number)
+  "Return cache domains affected by Project NUMBER for OWNER."
+  (list (magh-api--domain context 'project-list owner)
+        (magh-api--domain context 'project (and number (list owner number)))
+        (magh-api--domain context 'project-item (and number (list owner number)))
+        (magh-api--domain context 'project-field (and number (list owner number)))))
+
+(defun magh-api--project-list
+    (context callback errback &optional force owner include-closed)
+  "Fetch Projects for OWNER.
+OWNER defaults to the repository owner in CONTEXT, or `@me'.  When
+INCLUDE-CLOSED is non-nil, include closed Projects."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
   (magh-api--read-json
    context
-   (list "project" "list" "--owner" (magh-context-owner context)
-         "--limit" (number-to-string magh-list-limit) "--format" "json")
+   (append (list "project" "list" "--owner" owner
+                 "--limit" (number-to-string magh-list-limit)
+                 "--format" "json")
+           (when include-closed '("--closed")))
    callback errback :force force
    :transform (lambda (data) (alist-get 'projects data))
-   :domain (magh-api--domain context 'project)))
+   :domain (magh-api--domain context 'project-list owner)))
+
+(defun magh-api--project-get
+    (context owner number callback errback &optional force)
+  "Fetch Project NUMBER owned by OWNER."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--read-json
+   context
+   (list "project" "view" (format "%s" number) "--owner" owner
+         "--format" "json")
+   callback errback :force force
+   :domain (magh-api--domain context 'project (list owner number))))
+
+(defun magh-api--project-items
+    (context owner number callback errback &optional force)
+  "Fetch items in Project NUMBER owned by OWNER."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--read-json
+   context
+   (list "project" "item-list" (format "%s" number) "--owner" owner
+         "--limit" (number-to-string magh-list-limit) "--format" "json")
+   callback errback :force force
+   :transform (lambda (data) (alist-get 'items data))
+   :domain (magh-api--domain context 'project-item (list owner number))))
+
+(defun magh-api--project-fields
+    (context project-id callback errback &optional force)
+  "Fetch editable metadata for fields in PROJECT-ID."
+  (setq context (magh-api--context context))
+  (magh-api--read-json
+   context '("api" "graphql" "--input" "-") callback errback
+   :force force
+   :stdin (magh-api--graphql-payload
+           magh-api--project-fields-query `((id . ,project-id)))
+   :transform
+   (lambda (data)
+     (magh-api--json-at data 'data 'node 'fields 'nodes))
+   :domain (magh-api--domain context 'project-field project-id)))
+
+(defun magh-api--project-create (context owner values callback errback)
+  "Create an OWNER Project using VALUES."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (append (list "project" "create" "--owner" owner "--format" "json")
+           (magh-api--flag "--title" (plist-get values :title)))
+   (magh-api--project-domains context owner) callback errback))
+
+(defun magh-api--project-edit
+    (context owner number values callback errback)
+  "Edit Project NUMBER owned by OWNER using VALUES."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (append
+    (list "project" "edit" (format "%s" number) "--owner" owner
+          "--format" "json")
+    (cl-loop for (key flag) in
+             '((:title "--title") (:description "--description")
+               (:readme "--readme") (:visibility "--visibility"))
+             when (plist-member values key)
+             append (list flag (or (plist-get values key) ""))))
+   (magh-api--project-domains context owner number) callback errback))
+
+(defun magh-api--project-close
+    (context owner number closed callback errback)
+  "Close Project NUMBER owned by OWNER, or reopen it when CLOSED is nil."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (append (list "project" "close" (format "%s" number)
+                 "--owner" owner "--format" "json")
+           (unless closed '("--undo")))
+   (magh-api--project-domains context owner number) callback errback))
+
+(defun magh-api--project-item-add
+    (context owner number url callback errback)
+  "Add the Issue or Pull Request at URL to Project NUMBER."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (list "project" "item-add" (format "%s" number) "--owner" owner
+         "--url" url "--format" "json")
+   (magh-api--project-domains context owner number) callback errback))
+
+(defun magh-api--project-item-create
+    (context owner number values callback errback)
+  "Create a draft Issue in Project NUMBER using VALUES."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (append (list "project" "item-create" (format "%s" number)
+                 "--owner" owner "--format" "json")
+           (magh-api--flag "--title" (plist-get values :title))
+           (magh-api--flag "--body" (plist-get values :body)))
+   (magh-api--project-domains context owner number) callback errback))
+
+(defun magh-api--project-draft-edit
+    (context owner number item-id values callback errback)
+  "Edit draft ITEM-ID in Project NUMBER using VALUES."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (append (list "project" "item-edit" "--id" item-id "--format" "json")
+           (when (plist-member values :title)
+             (list "--title" (or (plist-get values :title) "")))
+           (when (plist-member values :body)
+             (list "--body" (or (plist-get values :body) ""))))
+   (magh-api--project-domains context owner number) callback errback))
+
+(defun magh-api--project-field-args
+    (project-id item-id field-id type value clear)
+  "Build safe `gh project item-edit' arguments for one field.
+PROJECT-ID, ITEM-ID, and FIELD-ID are node IDs.  TYPE is the Project field
+data type.  VALUE is ignored when CLEAR is non-nil."
+  (let ((flag
+         (pcase (upcase (format "%s" type))
+           ("TEXT" "--text")
+           ("NUMBER" "--number")
+           ("DATE" "--date")
+           ("SINGLE_SELECT" "--single-select-option-id")
+           ("ITERATION" "--iteration-id")
+           (_ (user-error "Project field type %s is not editable" type)))))
+    (append (list "project" "item-edit" "--id" item-id
+                  "--project-id" project-id "--field-id" field-id)
+            (if clear '("--clear") (list flag (format "%s" value)))
+            '("--format" "json"))))
+
+(defun magh-api--project-field-edit
+    (context owner number project-id item-id field-id type value clear
+             callback errback)
+  "Set or CLEAR one Project field on ITEM-ID."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (magh-api--project-field-args
+    project-id item-id field-id type value clear)
+   (magh-api--project-domains context owner number) callback errback))
+
+(defun magh-api--project-item-archive
+    (context owner number item-id archived callback errback)
+  "Archive Project ITEM-ID, or restore it when ARCHIVED is nil."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (append (list "project" "item-archive" (format "%s" number)
+                 "--owner" owner "--id" item-id "--format" "json")
+           (unless archived '("--undo")))
+   (magh-api--project-domains context owner number) callback errback))
+
+(defun magh-api--project-item-remove
+    (context owner number item-id callback errback)
+  "Remove ITEM-ID from Project NUMBER without deleting its content."
+  (setq context (magh-api--context context)
+        owner (magh-api--project-owner context owner))
+  (magh-api--mutate-json
+   context
+   (list "project" "item-delete" (format "%s" number) "--owner" owner
+         "--id" item-id "--format" "json")
+   (magh-api--project-domains context owner number) callback errback))
 
 (defun magh-api--repo-create (context values callback errback)
   "Create a repository from VALUES plist."
@@ -1304,6 +1566,51 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
            (magh-api--repo-args context))
    callback errback :force force :domain (magh-api--domain context 'run id)))
 
+(defun magh-api--artifact-pages (pages)
+  "Flatten artifact arrays from paginated REST PAGES."
+  (apply #'append
+         (mapcar (lambda (page) (alist-get 'artifacts page)) pages)))
+
+(defun magh-api--artifact-list
+    (context run-id callback errback &optional force)
+  "Fetch artifacts produced by workflow RUN-ID."
+  (setq context (magh-api--context context t))
+  (magh-api--read-json
+   context
+   (magh-api--rest-argv
+    (magh-core--repo-endpoint
+     context (format "actions/runs/%s/artifacts" run-id))
+    "GET" '((per_page . 100)) t)
+   callback errback :force force :transform #'magh-api--artifact-pages
+   :domain (magh-api--domain context 'artifact run-id)))
+
+(defun magh-api--artifact-download
+    (context run-id names directory callback errback)
+  "Download and extract NAMES from RUN-ID into DIRECTORY.
+When NAMES is nil, download every artifact in the run."
+  (setq context (magh-api--context context t))
+  (magh-api--mutate-text
+   context
+   (append (list "run" "download" (format "%s" run-id)
+                 "--dir" (expand-file-name directory))
+           (magh-api--repeated-flags "--name" names)
+           (magh-api--repo-args context))
+   nil callback errback))
+
+(defun magh-api--artifact-delete
+    (context run-id artifact-id callback errback)
+  "Delete ARTIFACT-ID from workflow RUN-ID."
+  (setq context (magh-api--context context t))
+  (magh-api--mutate-text
+   context
+   (magh-api--rest-argv
+    (magh-core--repo-endpoint
+     context (format "actions/artifacts/%s" artifact-id))
+    "DELETE")
+   (list (magh-api--domain context 'artifact run-id)
+         (magh-api--domain context 'run run-id))
+   callback errback))
+
 (defun magh-api--run-log (context id job-id callback errback &optional force)
   "Fetch text log for Run ID, optionally restricted to JOB-ID."
   (setq context (magh-api--context context t))
@@ -1723,6 +2030,157 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
     (magh-client--json-async argv callback errback
                            :context context :cache nil :dedupe nil)))
 
+;;; Discussions
+
+(defun magh-api--discussion-cursor (cursor)
+  "Normalize optional Discussion CURSOR for JSON serialization."
+  (if (and cursor (not (equal cursor ""))) cursor :null))
+
+(defun magh-api--discussion-page-data (data)
+  "Normalize a Discussion connection in GraphQL DATA to `magh-page'."
+  (let* ((connection
+          (magh-api--json-at data 'data 'repository 'discussions))
+         (page-info (alist-get 'pageInfo connection)))
+    (magh-page-create
+     :items (alist-get 'nodes connection)
+     :next (and (magh-api--true-p (alist-get 'hasNextPage page-info))
+                (alist-get 'endCursor page-info)))))
+
+(defun magh-api--discussion-page
+    (context params cursor callback errback &optional force)
+  "Fetch one Discussion page in CONTEXT according to PARAMS and CURSOR."
+  (setq context (magh-api--context context t))
+  (let ((variables
+         `((owner . ,(magh-context-owner context))
+           (name . ,(magh-context-name context))
+           (first . ,(magh-api--page-size params))
+           (after . ,(magh-api--discussion-cursor cursor))
+           (categoryId . ,(or (plist-get params :category-id) :null)))))
+    (magh-api--read-json
+     context '("api" "graphql" "--input" "-") callback errback
+     :force force :transform #'magh-api--discussion-page-data
+     :stdin (magh-api--graphql-payload
+             magh-api--discussion-page-query variables)
+     :domain (magh-api--domain
+              context 'discussion-list
+              (list (plist-get params :category-id) cursor)))))
+
+(defun magh-api--discussion-get
+    (context number callback errback &optional force)
+  "Fetch Discussion NUMBER with up to 100 comments and replies."
+  (setq context (magh-api--context context t))
+  (magh-api--read-json
+   context '("api" "graphql" "--input" "-") callback errback
+   :force force
+   :transform (lambda (data)
+                (magh-api--json-at data 'data 'repository 'discussion))
+   :stdin
+   (magh-api--graphql-payload
+    magh-api--discussion-query
+    `((owner . ,(magh-context-owner context))
+      (name . ,(magh-context-name context))
+      (number . ,number)))
+   :domain (magh-api--domain context 'discussion number)))
+
+(defun magh-api--discussion-categories
+    (context callback errback &optional force)
+  "Fetch repository node ID and Discussion categories in CONTEXT."
+  (setq context (magh-api--context context t))
+  (magh-api--read-json
+   context '("api" "graphql" "--input" "-") callback errback
+   :force force
+   :transform (lambda (data)
+                (magh-api--json-at data 'data 'repository))
+   :stdin
+   (magh-api--graphql-payload
+    magh-api--discussion-categories-query
+    `((owner . ,(magh-context-owner context))
+      (name . ,(magh-context-name context))))
+   :domain (magh-api--domain context 'discussion-category)))
+
+(defun magh-api--discussion-domains (context &optional number)
+  "Return Discussion cache domains affected by NUMBER."
+  (list (magh-api--domain context 'discussion-list)
+        (magh-api--domain context 'discussion number)
+        (magh-api--domain context 'notification)))
+
+(defun magh-api--discussion-mutate
+    (context query input domains callback errback)
+  "Run Discussion mutation QUERY with INPUT and invalidate DOMAINS."
+  (magh-api--mutate-json
+   context '("api" "graphql" "--input" "-") domains callback errback
+   :stdin (magh-api--graphql-payload query `((input . ,input)))
+   :preserve-false t))
+
+(defun magh-api--discussion-create (context values callback errback)
+  "Create a Discussion using VALUES."
+  (setq context (magh-api--context context t))
+  (magh-api--discussion-mutate
+   context magh-api--discussion-create-mutation
+   `((repositoryId . ,(plist-get values :repository-id))
+     (categoryId . ,(plist-get values :category-id))
+     (title . ,(plist-get values :title))
+     (body . ,(or (plist-get values :body) "")))
+   (magh-api--discussion-domains context) callback errback))
+
+(defun magh-api--discussion-update
+    (context number discussion-id values callback errback)
+  "Update Discussion NUMBER identified by DISCUSSION-ID using VALUES."
+  (setq context (magh-api--context context t))
+  (let ((input `((discussionId . ,discussion-id))))
+    (dolist (entry '((:title . title) (:body . body)
+                     (:category-id . categoryId)))
+      (when (plist-member values (car entry))
+        (setq input
+              (append input
+                      (list (cons (cdr entry)
+                                  (or (plist-get values (car entry)) "")))))))
+    (magh-api--discussion-mutate
+     context magh-api--discussion-update-mutation input
+     (magh-api--discussion-domains context number) callback errback)))
+
+(defun magh-api--discussion-comment
+    (context number discussion-id body callback errback &optional reply-to-id)
+  "Add BODY to Discussion NUMBER, optionally replying to REPLY-TO-ID."
+  (setq context (magh-api--context context t))
+  (magh-api--discussion-mutate
+   context magh-api--discussion-comment-mutation
+   (append `((discussionId . ,discussion-id) (body . ,body))
+           (when reply-to-id `((replyToId . ,reply-to-id))))
+   (magh-api--discussion-domains context number) callback errback))
+
+(defun magh-api--discussion-close
+    (context number discussion-id reason callback errback)
+  "Close Discussion NUMBER for REASON."
+  (setq context (magh-api--context context t)
+        reason (upcase (format "%s" reason)))
+  (unless (member reason '("RESOLVED" "OUTDATED" "DUPLICATE"))
+    (user-error "Unsupported Discussion close reason: %s" reason))
+  (magh-api--discussion-mutate
+   context magh-api--discussion-close-mutation
+   `((discussionId . ,discussion-id) (reason . ,reason))
+   (magh-api--discussion-domains context number) callback errback))
+
+(defun magh-api--discussion-reopen
+    (context number discussion-id callback errback)
+  "Reopen Discussion NUMBER."
+  (setq context (magh-api--context context t))
+  (magh-api--discussion-mutate
+   context magh-api--discussion-reopen-mutation
+   `((discussionId . ,discussion-id))
+   (magh-api--discussion-domains context number) callback errback))
+
+(defun magh-api--discussion-mark-answer
+    (context number comment-id marked callback errback)
+  "Mark COMMENT-ID as the answer to Discussion NUMBER, or unmark it."
+  (setq context (magh-api--context context t))
+  (magh-api--discussion-mutate
+   context
+   (if marked magh-api--discussion-mark-answer-mutation
+     magh-api--discussion-unmark-answer-mutation)
+   `((id . ,comment-id))
+   (magh-api--discussion-domains context number) callback errback))
+
 ;;; Gist
 
 (defun magh-api--gist-list (context callback errback &optional force)
@@ -1741,6 +2199,93 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
   (magh-api--read-json
    context (list "api" (format "gists/%s" id)) callback errback
    :force force :domain (magh-api--domain context 'gist id)))
+
+(defun magh-api--gist-files-object (files)
+  "Return a JSON object for Gist FILES.
+FILES is an alist whose keys are current filenames.  Values are plists with
+optional :content and :filename keys, or nil to remove the file."
+  (let ((object (make-hash-table :test #'equal)) seen)
+    (dolist (entry files object)
+      (let ((filename (car entry)) (spec (cdr entry)))
+        (when (string-empty-p (or filename ""))
+          (user-error "Gist filenames cannot be empty"))
+        (when (member filename seen)
+          (user-error "Duplicate Gist filename: %s" filename))
+        (push filename seen)
+        (when (and spec (plist-member spec :filename)
+                   (string-empty-p (or (plist-get spec :filename) "")))
+          (user-error "Gist filenames cannot be empty"))
+        (puthash
+         filename
+         (if (null spec)
+             :null
+           (append
+            (when (plist-member spec :filename)
+              `((filename . ,(plist-get spec :filename))))
+            (when (plist-member spec :content)
+              `((content . ,(or (plist-get spec :content) ""))))))
+         object)))))
+
+(defun magh-api--gist-payload (values)
+  "Serialize Gist VALUES as nested JSON suitable for stdin."
+  (let (payload)
+    (when (plist-member values :description)
+      (push `(description . ,(or (plist-get values :description) "")) payload))
+    (when (plist-member values :public)
+      (push `(public . ,(if (magh-api--true-p (plist-get values :public))
+                           t :json-false))
+            payload))
+    (when (plist-member values :files)
+      (push `(files . ,(magh-api--gist-files-object
+                        (plist-get values :files))) payload))
+    (json-serialize (nreverse payload) :false-object :json-false)))
+
+(defun magh-api--gist-create (context values callback errback)
+  "Create a Gist from VALUES using a JSON stdin payload."
+  (setq context (magh-api--context context))
+  (magh-api--mutate-json
+   context '("api" "gists" "--method" "POST" "--input" "-")
+   (magh-api--domain context 'gist) callback errback
+   :stdin (magh-api--gist-payload values) :preserve-false t))
+
+(defun magh-api--gist-update (context id values callback errback)
+  "Update Gist ID from VALUES using a JSON stdin payload."
+  (setq context (magh-api--context context))
+  (magh-api--mutate-json
+   context
+   (list "api" (format "gists/%s" id) "--method" "PATCH"
+         "--input" "-")
+   (list (magh-api--domain context 'gist)
+         (magh-api--domain context 'gist id)
+         (magh-api--domain context 'gist-file))
+   callback errback :stdin (magh-api--gist-payload values)
+   :preserve-false t))
+
+(defun magh-api--gist-file-remove
+    (context id filename callback errback)
+  "Remove FILENAME from Gist ID while preserving at least one file."
+  (setq context (magh-api--context context))
+  (magh-api--gist-get
+   context id
+   (lambda (gist)
+     (if (<= (length (alist-get 'files gist)) 1)
+         (funcall errback
+                  (magh-core--error
+                   'magh-invalid-input
+                   "Cannot remove the last file from a Gist"))
+       (magh-api--gist-update
+        context id (list :files (list (cons filename nil)))
+        callback errback)))
+   errback t))
+
+(defun magh-api--gist-file-raw
+    (context id filename callback errback &optional force)
+  "Fetch full raw FILENAME content from Gist ID."
+  (setq context (magh-api--context context))
+  (magh-api--read-text
+   context (list "gist" "view" id "--raw" "--filename" filename)
+   callback errback :force force
+   :domain (magh-api--domain context 'gist-file (list id filename))))
 
 ;;; Generic API
 

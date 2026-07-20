@@ -32,6 +32,10 @@
 (declare-function magh-review-requests "magh-pr")
 (declare-function magh-run-list "magh-actions")
 (declare-function magh-workflow-list "magh-actions")
+(declare-function magh-project-list "magh-project")
+(declare-function magh-project-create "magh-project")
+(declare-function magh-discussion-list "magh-discussion")
+(declare-function magh-discussion-create "magh-discussion")
 (declare-function magh-release-list "magh-release")
 (declare-function magh-release-create "magh-release")
 (declare-function magh-commit-list "magh-commit")
@@ -40,6 +44,7 @@
 (declare-function magh-search-dispatch "magh-search")
 (declare-function magh-notifications-dispatch "magh-notify")
 (declare-function magh-gist-list "magh-pages")
+(declare-function magh-gist-create "magh-pages")
 (declare-function magh-command "magh-command")
 (declare-function magh-api-request "magh-command")
 (declare-function magh-auth-switch "magh-command")
@@ -56,7 +61,9 @@
     ("i" "Issues" magh-issue-list)
     ("p" "Pull requests" magh-pr-list)
     ("R" "Review requests" magh-review-requests)
-    ("a" "Actions" magh-run-list)]
+    ("a" "Actions" magh-run-list)
+    ("P" "Projects" magh-project-list)
+    ("d" "Discussions" magh-discussion-list)]
    ["Explore"
     ("w" "Workflows" magh-workflow-list)
     ("r" "Releases" magh-release-list)
@@ -85,7 +92,10 @@
    ["Create resources"
     ("i" "Issue" magh-issue-create)
     ("p" "Pull request" magh-pr-create)
-    ("r" "Release" magh-release-create)]
+    ("r" "Release" magh-release-create)
+    ("P" "Project" magh-project-create)
+    ("d" "Discussion" magh-discussion-create)
+    ("g" "Gist" magh-gist-create)]
    ["Maintenance"
     ("x" "Clean temporary clones" magh-clean-temporary-clones)
     ("A" "Switch account" magh-auth-switch)]])

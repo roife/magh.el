@@ -24,6 +24,8 @@
 (require 'magh-issue)
 (require 'magh-pr)
 (require 'magh-actions)
+(require 'magh-project)
+(require 'magh-discussion)
 (require 'magh-release)
 (require 'magh-commit)
 (require 'magh-browse)

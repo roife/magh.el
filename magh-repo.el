@@ -21,6 +21,19 @@
 (require 'magh-edit)
 (require 'magh-ui)
 
+(declare-function magh-project-list "magh-project")
+(declare-function magh-discussion-list "magh-discussion")
+
+(defun magh-repo--projects ()
+  "Open Projects for the repository context of the current page."
+  (interactive)
+  (magh-project-list magh-buffer-context))
+
+(defun magh-repo--discussions ()
+  "Open Discussions for the repository context of the current page."
+  (interactive)
+  (magh-discussion-list magh-buffer-context))
+
 (defun magh-repo--buffer-name (context &optional suffix)
   "Return native repository buffer name for CONTEXT and SUFFIX."
   (format "*magh: %s%s*" (magh-context-repository context)
@@ -372,6 +385,8 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
   (local-set-key (kbd "a")
                  (lambda () (interactive)
                    (magh-resource-open (magh-resource-create 'run-list context))))
+  (local-set-key (kbd "j") #'magh-repo--projects)
+  (local-set-key (kbd "d") #'magh-repo--discussions)
   (local-set-key (kbd "r")
                  (lambda () (interactive)
                    (magh-resource-open (magh-resource-create 'release-list context))))
@@ -687,7 +702,9 @@ Interactively, offer Git remotes whose URLs identify GitHub repositories."
   "Repository actions."
   [["View"
     ("g" "Refresh" magh-ui-refresh)
-    ("s" "Statistics" magh-statistics)
+   ("s" "Statistics" magh-statistics)
+    ("j" "Projects" magh-repo--projects)
+    ("d" "Discussions" magh-repo--discussions)
     ("b" "Browse" magh-ui-browse)
     ("O" "Switch remote" magh-repo-switch-remote)]
    ["Manage"

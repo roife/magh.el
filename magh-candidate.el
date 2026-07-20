@@ -62,6 +62,12 @@ PROPERTIES are copied into the returned plist."
                                      (plist-get resource :tag))))
           ('run (magh-context-web-url
                  context (format "actions/runs/%s" (plist-get resource :id))))
+          ('artifact (magh-context-web-url
+                      context (format "actions/runs/%s"
+                                      (plist-get resource :run-id))))
+          ('discussion
+           (magh-context-web-url
+            context (format "discussions/%s" (plist-get resource :number))))
           ('workflow (magh-context-web-url
                       context (format "actions/workflows/%s"
                                       (or (plist-get resource :path)
@@ -261,6 +267,10 @@ CONTEXT supplies local navigation state when URL is relative to the same host."
             (magh-resource-create 'run repo-context
                                 :id (string-to-number (match-string 1 suffix))
                                 :url url))
+           ((string-match "\\`discussions/\\([0-9]+\\)" suffix)
+            (magh-resource-create
+             'discussion repo-context
+             :number (string-to-number (match-string 1 suffix)) :url url))
            ((string-match "\\`actions/workflows/\\([^/]+\\)" suffix)
             (magh-resource-create 'workflow repo-context
                                 :id (url-unhex-string (match-string 1 suffix))
@@ -306,6 +316,12 @@ CONTEXT supplies local navigation state when URL is relative to the same host."
             (magh-resource-create 'run context
                                 :id (string-to-number (match-string 1 api-url))
                                 :title title))
+           ((and (string= type "Discussion")
+                 (string-match "/discussions/\\([0-9]+\\)" api-url))
+            (magh-resource-create
+             'discussion context
+             :number (string-to-number (match-string 1 api-url))
+             :title title))
            ((and (string= type "Release")
                  (string-match "/releases/\\([0-9]+\\)" api-url))
             (magh-resource-create 'release-id context

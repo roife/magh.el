@@ -2,8 +2,9 @@
 
 `magh.el` is a Magit-style GitHub client for Emacs, powered by the
 [GitHub CLI](https://cli.github.com/). It presents repositories, issues, pull
-requests, reviews, Actions, releases, notifications, and source trees as native
-Emacs buffers built with `magit-section`.
+requests, reviews, Actions, Projects, Discussions, Gists, releases,
+notifications, and source trees as native Emacs buffers built with
+`magit-section`.
 
 > [!WARNING]
 > **Work in progress:** `magh.el` is under active development. Public commands,
@@ -24,13 +25,19 @@ without leaving Emacs.
 - Cursor-paginated issue and pull request lists, plus paginated commit history
 - Native issue and pull request detail pages, editing, and comments
 - Pull request review drafts, inline comments, threads, and review submission
-- GitHub Actions workflows, runs, jobs, steps, logs, reruns, and dispatch
+- GitHub Actions workflows, runs, jobs, steps, logs, artifacts, reruns, and
+  dispatch
+- Owner-level Projects with README, field metadata, Issue/PR and draft items,
+  archiving, removal, and supported field-value updates
+- Repository Discussions with categories, comments, replies, Q&A answers, and
+  close/reopen workflows
 - Release creation, editing, generated notes, publishing, and asset downloads
 - Cancellable Consult search for repositories, issues, pull requests, code, and
   commits
 - Notifications with native previews, grouping, and read/subscription actions
 - Clone-free browsing of remote repository trees and files
-- Repository, branch, commit, Gist, and statistics views
+- Repository, branch, commit, and statistics views, plus Gist creation and
+  per-file editing
 - Optional Magit, Embark, and Forge integration
 - A PTY for arbitrary `gh` commands and a generic REST/GraphQL API viewer
 
@@ -92,7 +99,16 @@ Useful direct entry points include:
 | `magh-pr-list` | Browse pull requests |
 | `magh-review-requests` | Show pull requests awaiting your review |
 | `magh-run-list` | Browse Actions runs, jobs, steps, and logs |
+| `magh-run-artifact-download` | Extract selected or all available Run artifacts |
 | `magh-workflow-list` | Browse and dispatch workflows |
+| `magh-project-list` | Browse Projects for a repository owner or `@me` |
+| `magh-project-create` | Create an owner-level Project |
+| `magh-discussion-list` | Browse repository Discussions |
+| `magh-discussion-create` | Create a repository Discussion |
+| `magh-gist-list` | Browse your Gists |
+| `magh-gist-create` | Create a secret or public single-file Gist |
+| `magh-gist-edit-metadata` | Edit a Gist description |
+| `magh-gist-file-edit` | Edit a Gist file's full content |
 | `magh-release-list` | Browse releases with preview |
 | `magh-search-dispatch` | Search GitHub with Consult |
 | `magh-notifications-dispatch` | Browse and manage notifications |
@@ -113,8 +129,20 @@ contextual action menu or `?` for the top-level menu. Use `b` or `o` to open the
 resource at point on GitHub, and `w` to copy its URL. Use `C-h m` in any page to
 see its resource-specific commands.
 
-Issue, pull request, and release editors use `C-c C-c` to submit and `C-c C-k`
-to cancel.
+Issue, pull request, Project, Discussion, Release, and Gist editors use
+`C-c C-c` to submit and `C-c C-k` to cancel.
+
+Actions artifact downloads are extracted into `magh-download-directory` (or a
+directory selected at download time). Expired artifacts cannot be downloaded;
+artifact deletion always uses the configured destructive-action confirmation.
+
+Projects write commands require the token used by `gh` to have the `project`
+scope. Gist creation and editing require Gist write access. `magh.el` never
+widens token scopes automatically; use `gh auth refresh -s project` or the
+equivalent host-specific authentication workflow when GitHub reports a missing
+scope. GitHub Enterprise hosts are used as configured, and unsupported or
+disabled features report their API/CLI error without falling back to
+`github.com`.
 
 ## Configuration
 
@@ -164,7 +192,8 @@ does not wait for network requests.
 ```
 
 This adds resource-aware actions for repositories, files, issues, pull
-requests, releases, workflows, runs, branches, commits, and notifications.
+requests, releases, workflows, runs, artifacts, Projects, Discussions, Gists,
+branches, commits, and notifications.
 
 ### Forge
 

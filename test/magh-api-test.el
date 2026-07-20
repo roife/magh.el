@@ -431,5 +431,180 @@
     (should-not (seq-some (lambda (arg) (string-prefix-p "line=" arg))
                           (car captured)))))
 
+(ert-deftest magh-api-artifact-download-and-delete-preserve-contracts ()
+  (let ((context (magh-context-from-repository
+                  "acme/widgets" "github.example"))
+        mutations invalidated)
+    (cl-letf (((symbol-function 'magh-client--mutate-text)
+               (lambda (argv success _error &rest _keys)
+                 (push argv mutations)
+                 (funcall success "")
+                 'request))
+              ((symbol-function 'magh-client-invalidate)
+               (lambda (domain) (push domain invalidated))))
+      (magh-api--artifact-download
+       context 71 '("linux build" "macOS") "/tmp/magh artifacts"
+       #'ignore #'ignore)
+      (magh-api--artifact-delete context 71 902 #'ignore #'ignore))
+    (let ((download (cadr mutations)) (delete (car mutations)))
+      (should
+       (equal download
+              '("run" "download" "71" "--dir" "/tmp/magh artifacts"
+                "--name" "linux build" "--name" "macOS"
+                "--repo" "acme/widgets")))
+      (should (equal delete
+                     '("api" "repos/acme/widgets/actions/artifacts/902"
+                       "--method" "DELETE"))))
+    (should (member '(:host "github.example" :repository "acme/widgets"
+                      :resource artifact :id 71)
+                    invalidated))
+    (should (member '(:host "github.example" :repository "acme/widgets"
+                      :resource run :id 71)
+                    invalidated))))
+
+(ert-deftest magh-api-project-field-types-map-to-one-cli-value-flag ()
+  (dolist (contract
+           '(("TEXT" "hello" "--text")
+             ("NUMBER" 12.5 "--number")
+             ("DATE" "2026-07-20" "--date")
+             ("SINGLE_SELECT" "OPT" "--single-select-option-id")
+             ("ITERATION" "ITER" "--iteration-id")))
+    (let ((argv (magh-api--project-field-args
+                 "PROJECT" "ITEM" "FIELD"
+                 (nth 0 contract) (nth 1 contract) nil)))
+      (should (equal (cadr (member "--id" argv)) "ITEM"))
+      (should (equal (cadr (member "--project-id" argv)) "PROJECT"))
+      (should (equal (cadr (member "--field-id" argv)) "FIELD"))
+      (should (equal (cadr (member (nth 2 contract) argv))
+                     (format "%s" (nth 1 contract))))
+      (should (= 1 (cl-count-if
+                    (lambda (arg)
+                      (member arg '("--text" "--number" "--date"
+                                    "--single-select-option-id"
+                                    "--iteration-id" "--clear")))
+                    argv)))))
+  (let ((argv (magh-api--project-field-args
+               "PROJECT" "ITEM" "FIELD" "TEXT" nil t)))
+    (should (member "--clear" argv))
+    (should-not (member "--text" argv))))
+
+(ert-deftest magh-api-discussion-page-normalizes-cursor-in-json-payload ()
+  (let ((context (magh-context-from-repository "acme/widgets")) payloads)
+    (cl-letf (((symbol-function 'magh-client--json-async)
+               (lambda (_argv _success _error &rest keys)
+                 (push (json-parse-string
+                        (plist-get keys :stdin)
+                        :object-type 'alist :array-type 'list
+                        :null-object :null)
+                       payloads)
+                 'request)))
+      (magh-api--discussion-page context '(:limit 25) nil #'ignore #'ignore)
+      (magh-api--discussion-page
+       context '(:limit 25 :category-id "CAT") "CURSOR" #'ignore #'ignore))
+    (let ((first (cadr payloads)) (next (car payloads)))
+      (should (eq (magh-api--json-at first 'variables 'after) :null))
+      (should (eq (magh-api--json-at first 'variables 'categoryId) :null))
+      (should (= (magh-api--json-at first 'variables 'first) 25))
+      (should (equal (magh-api--json-at next 'variables 'after) "CURSOR"))
+      (should (equal (magh-api--json-at next 'variables 'categoryId) "CAT")))))
+
+(ert-deftest magh-api-discussion-mutations-send-typed-graphql-json-inputs ()
+  (let ((context (magh-context-from-repository "acme/widgets")) calls)
+    (cl-letf (((symbol-function 'magh-client--mutate-json)
+               (lambda (argv _success _error &rest keys)
+                 (push (cons argv
+                             (json-parse-string
+                              (plist-get keys :stdin)
+                              :object-type 'alist :array-type 'list))
+                       calls)
+                 'request)))
+      (magh-api--discussion-create
+       context '(:repository-id "REPO" :category-id "CAT"
+                 :title "Title" :body "line 1\nline 2")
+       #'ignore #'ignore)
+      (magh-api--discussion-comment
+       context 7 "DISC" "reply\nbody" #'ignore #'ignore "PARENT")
+      (magh-api--discussion-close
+       context 7 "DISC" "duplicate" #'ignore #'ignore)
+      (magh-api--discussion-mark-answer
+       context 7 "COMMENT" t #'ignore #'ignore))
+    (dolist (call calls)
+      (should (equal (car call) '("api" "graphql" "--input" "-"))))
+    (let* ((create (nth 3 calls))
+           (reply (nth 2 calls))
+           (close (nth 1 calls))
+           (answer (nth 0 calls)))
+      (should
+       (equal (magh-api--json-at (cdr create) 'variables 'input)
+              '((repositoryId . "REPO") (categoryId . "CAT")
+                (title . "Title") (body . "line 1\nline 2"))))
+      (should
+       (equal (magh-api--json-at (cdr reply) 'variables 'input 'replyToId)
+              "PARENT"))
+      (should
+       (equal (magh-api--json-at (cdr close) 'variables 'input 'reason)
+              "DUPLICATE"))
+      (should
+       (equal (magh-api--json-at (cdr answer) 'variables 'input)
+              '((id . "COMMENT")))))))
+
+(ert-deftest magh-api-gist-json-preserves-special-filenames-and-multiline-content ()
+  (let ((context (magh-context-create)) calls)
+    (cl-letf (((symbol-function 'magh-client--mutate-json)
+               (lambda (argv _success _error &rest keys)
+                 (push (cons argv
+                             (json-parse-string
+                              (plist-get keys :stdin)
+                              :object-type 'alist :array-type 'list
+                              :null-object :null
+                              :false-object :json-false))
+                       calls)
+                 'request)))
+      (magh-api--gist-create
+       context
+       '(:description "desc\nline" :public :json-false
+         :files (("a b[$].el" :content "(message \"$HOME\")\n`x`\n")))
+       #'ignore #'ignore)
+      (magh-api--gist-update
+       context "GIST"
+       '(:files (("old name.txt" :filename "new name.txt"
+                  :content "new\ncontent")
+                 ("remove.me")))
+       #'ignore #'ignore))
+    (let* ((create (cadr calls)) (update (car calls))
+           (create-file
+            (alist-get (intern "a b[$].el")
+                       (alist-get 'files (cdr create))))
+           (renamed
+            (alist-get (intern "old name.txt")
+                       (alist-get 'files (cdr update)))))
+      (should (equal (car create)
+                     '("api" "gists" "--method" "POST" "--input" "-")))
+      (should (equal (car update)
+                     '("api" "gists/GIST" "--method" "PATCH" "--input" "-")))
+      (should (eq (alist-get 'public (cdr create)) :json-false))
+      (should (equal (alist-get 'description (cdr create)) "desc\nline"))
+      (should (equal (alist-get 'content create-file)
+                     "(message \"$HOME\")\n`x`\n"))
+      (should (equal (alist-get 'filename renamed) "new name.txt"))
+      (should (equal (alist-get 'content renamed) "new\ncontent"))
+      (should (eq (alist-get (intern "remove.me")
+                             (alist-get 'files (cdr update)))
+                  :null)))))
+
+(ert-deftest magh-api-gist-refuses-to-remove-its-last-file ()
+  (let ((context (magh-context-create)) updated failure)
+    (cl-letf (((symbol-function 'magh-api--gist-get)
+               (lambda (_context _id callback _errback &optional _force)
+                 (funcall callback
+                          '((files . ((only.txt . ((filename . "only.txt")))))))))
+              ((symbol-function 'magh-api--gist-update)
+               (lambda (&rest _) (setq updated t))))
+      (magh-api--gist-file-remove
+       context "GIST" "only.txt" #'ignore
+       (lambda (error) (setq failure error))))
+    (should-not updated)
+    (should (eq (car failure) 'magh-invalid-input))))
+
 (provide 'magh-api-test)
 ;;; magh-api-test.el ends here

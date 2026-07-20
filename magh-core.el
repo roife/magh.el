@@ -124,7 +124,7 @@ Each entry is (KIND . FUNCTION).  FUNCTION receives a resource plist."
   :type 'directory)
 
 (defcustom magh-download-directory nil
-  "Initial directory for release asset downloads.
+  "Initial directory for Release asset and Actions artifact downloads.
 When nil, use `default-directory'."
   :type '(choice (const nil) directory))
 
