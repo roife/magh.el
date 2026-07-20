@@ -28,10 +28,12 @@
 (require 'magh-discussion)
 (require 'magh-release)
 (require 'magh-commit)
+(require 'magh-review)
 (require 'magh-browse)
 (require 'magh-notify)
 (require 'magh-search)
 (require 'magh-pages)
+(require 'magh-gist)
 
 (require 'magh-command)
 (require 'magh-dispatch)

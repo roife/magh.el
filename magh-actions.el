@@ -41,30 +41,43 @@
   (or (alist-get 'conclusion data)
       (alist-get 'status data)))
 
+(defun magh-actions--run-row (data &optional workflow-page)
+  "Return a display row for Run DATA.
+WORKFLOW-PAGE selects the compact branch-oriented variant."
+  (let ((state (magh-actions--run-state data)))
+    (magh-ui--row
+     (magh-ui--styled (upcase state) (magh-core--state-face state))
+     (magh-ui--styled (alist-get 'displayTitle data) 'magh-resource-title)
+     (magh-ui--styled
+      (if workflow-page
+          (alist-get 'headBranch data)
+        (or (alist-get 'workflowName data) (alist-get 'name data)))
+      (if workflow-page 'magh-branch 'magh-workflow)))))
+
+(cl-defun magh-actions--insert-run-metadata
+    (data &key workflow-page commit date-label date)
+  "Insert shared Run DATA metadata.
+WORKFLOW-PAGE omits the redundant branch, and COMMIT includes the head SHA.
+DATE-LABEL defaults to \"Created\", and DATE defaults to DATA's creation date."
+  (unless workflow-page
+    (magh-ui--insert-header "Branch" (alist-get 'headBranch data) 'magh-branch))
+  (magh-ui--insert-header "Event" (alist-get 'event data))
+  (magh-ui--insert-header (or date-label "Created")
+                          (magh-core--date
+                           (or date (alist-get 'createdAt data)))
+                          'magh-date)
+  (when commit
+    (magh-ui--insert-header "Commit" (alist-get 'headSha data) 'magh-hash)))
+
 (defun magh-actions--insert-run (context data &optional workflow-page)
   "Insert Run DATA in CONTEXT.
 When WORKFLOW-PAGE is non-nil, use the compact layout from the Workflow page."
   (let* ((resource (magh-actions--run-resource context data))
-         (id (plist-get resource :id))
-         (state (magh-actions--run-state data))
-         (title (alist-get 'displayTitle data))
-         (workflow (or (alist-get 'workflowName data)
-                       (alist-get 'name data)))
-         (branch (alist-get 'headBranch data))
-         (created (magh-core--date (alist-get 'createdAt data))))
+         (id (plist-get resource :id)))
     (magh-ui--section (run id resource t)
-      (magh-ui--row
-       (magh-ui--styled (upcase state) (magh-core--state-face state))
-       (magh-ui--styled title 'magh-resource-title)
-       (if workflow-page
-           (magh-ui--styled branch 'magh-branch)
-         (magh-ui--styled workflow 'magh-workflow)))
-      (unless workflow-page
-        (magh-ui--insert-header "Branch" branch 'magh-branch))
-      (magh-ui--insert-header "Event" (alist-get 'event data))
-      (magh-ui--insert-header "Created" created 'magh-date)
-      (magh-ui--insert-header "Commit" (alist-get 'headSha data)
-                            'magh-hash))))
+      (magh-actions--run-row data workflow-page)
+      (magh-actions--insert-run-metadata
+       data :workflow-page workflow-page :commit t))))
 
 (defun magh-actions--render-list (context data)
   "Render Actions Run list DATA."
@@ -457,8 +470,7 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
                (plist-get magh-actions--dispatch-resource :id)))
   (magh-api--run-rerun
    context id failed-only
-   (lambda (_) (message "Rerun requested for %s" id)
-     (magh-ui--refresh-if-page))
+   (magh-ui--refresh-message "Rerun requested for %s" id)
    #'magh-core--user-error))
 
 ;;;###autoload
@@ -493,8 +505,7 @@ job and step once, shorten ISO timestamps, and preserve ANSI escapes."
                (plist-get magh-actions--dispatch-resource :id)))
   (when (magh-core--confirm (format "Cancel Actions run %s? " id))
     (magh-api--run-cancel
-     context id (lambda (_) (message "Cancelled run %s" id)
-                  (magh-ui--refresh-if-page))
+     context id (magh-ui--refresh-message "Cancelled run %s" id)
      #'magh-core--user-error)))
 
 (defun magh-actions--artifacts ()
@@ -603,9 +614,7 @@ An empty NAMES selection downloads all non-expired artifacts."
                    (or (plist-get resource :name) artifact-id)))
       (magh-api--artifact-delete
        context run-id artifact-id
-       (lambda (_)
-         (message "Deleted artifact %s" artifact-id)
-         (magh-ui--refresh-if-page))
+       (magh-ui--refresh-message "Deleted artifact %s" artifact-id)
        #'magh-core--user-error))))
 
 (defun magh-workflow-toggle (&optional disable context workflow)
@@ -615,8 +624,8 @@ An empty NAMES selection downloads all non-expired artifacts."
         workflow (or workflow magh-actions--workflow-id))
   (magh-api--workflow-enable
    context workflow (not disable)
-   (lambda (_) (message "Workflow %s" (if disable "disabled" "enabled"))
-     (magh-ui--refresh-if-page))
+   (magh-ui--refresh-message
+    "Workflow %s" (if disable "disabled" "enabled"))
    #'magh-core--user-error))
 
 (defun magh-workflow-dispatch-run (&optional context workflow)

@@ -60,24 +60,17 @@
 
 (defun magh-discussion--render-list (context data)
   "Render paginated Discussion DATA in CONTEXT."
-  (let ((items (magh-page-items data)) (next (magh-page-next data)))
-    (magh-ui--insert-header "Repository" (magh-context-repository context)
-                            'magh-repository
-                            (magh-resource-create 'repository context))
-    (magh-ui--insert-header "Discussions" (length items))
-    (insert "\n")
-    (if items
-        (dolist (discussion items)
-          (magh-discussion--insert-row context discussion))
-      (insert (propertize "No Discussions found.\n" 'font-lock-face 'shadow)))
-    (if next
-        (magh-ui--section
-            (more 'more (magh-resource-create 'discussion-more context) t)
-          (format "Load next page (%d loaded)" (length items))
-          (insert "Press RET to append more Discussions.\n"))
-      (insert (propertize
-               (format "End of list (%d Discussions).\n" (length items))
-               'font-lock-face 'shadow)))))
+  (magh-ui--insert-header "Repository" (magh-context-repository context)
+                          'magh-repository
+                          (magh-resource-create 'repository context))
+  (magh-ui--insert-header "Discussions" (length (magh-page-items data)))
+  (insert "\n")
+  (magh-ui--insert-paged-items
+   context data
+   (lambda (discussion) (magh-discussion--insert-row context discussion))
+   'discussion-more :empty-message "No Discussions found."
+   :more-message "Press RET to append more Discussions."
+   :end-format "End of list (%d Discussions)."))
 
 ;;;###autoload
 (defun magh-discussion-list (&optional context params)
@@ -125,11 +118,8 @@
   (let* ((resource (magh-discussion--comment-resource context number reply t))
          (author (or (magh-core--name (alist-get 'author reply)) "unknown")))
     (magh-ui--section (comment (alist-get 'id reply) resource nil)
-      (concat (magh-ui--styled "Reply" 'magh-conversation-kind)
-              " by " (magh-ui--styled author 'magh-author)
-              " · "
-              (magh-ui--styled
-               (magh-core--date (alist-get 'createdAt reply)) 'magh-date))
+      (magh-ui--conversation-heading
+       "Reply" author (magh-core--date (alist-get 'createdAt reply)))
       (magh-ui--insert-markdown (alist-get 'body reply) context))))
 
 (defun magh-discussion--insert-truncation (resource label loaded total)
@@ -150,15 +140,10 @@
          (replies (magh-api--json-at comment 'replies 'nodes))
          (reply-total (magh-api--json-at comment 'replies 'totalCount)))
     (magh-ui--section (comment (alist-get 'id comment) resource nil)
-      (concat
-       (magh-ui--styled
-        (if (magh-api--true-p (alist-get 'isAnswer comment))
-            "Answer" "Comment")
-        'magh-conversation-kind)
-       " by " (magh-ui--styled author 'magh-author)
-       " · "
-       (magh-ui--styled
-        (magh-core--date (alist-get 'createdAt comment)) 'magh-date))
+      (magh-ui--conversation-heading
+       (if (magh-api--true-p (alist-get 'isAnswer comment))
+           "Answer" "Comment")
+       author (magh-core--date (alist-get 'createdAt comment)))
       (magh-ui--insert-markdown (alist-get 'body comment) context)
       (dolist (reply replies)
         (magh-discussion--insert-reply context number reply))
@@ -415,9 +400,8 @@
      (plist-get comment-resource :context)
      (plist-get comment-resource :discussion-number)
      (plist-get comment-resource :id) marked
-     (lambda (_)
-       (message "Discussion answer %s" (if marked "marked" "unmarked"))
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message
+      "Discussion answer %s" (if marked "marked" "unmarked"))
      #'magh-core--user-error)))
 
 ;;;###autoload
@@ -439,8 +423,7 @@
       (magh-api--discussion-close
        (plist-get resource :context) (plist-get resource :number)
        (plist-get resource :id) reason
-       (lambda (_) (message "Discussion closed")
-         (magh-ui--refresh-if-page))
+       (magh-ui--refresh-message "Discussion closed")
        #'magh-core--user-error))))
 
 ;;;###autoload
@@ -455,8 +438,7 @@
     (magh-api--discussion-reopen
      (plist-get resource :context) (plist-get resource :number)
      (plist-get resource :id)
-     (lambda (_) (message "Discussion reopened")
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message "Discussion reopened")
      #'magh-core--user-error)))
 
 (transient-define-prefix magh-discussion-list-dispatch ()

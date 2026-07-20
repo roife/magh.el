@@ -26,6 +26,7 @@
 (require 'magh-issue)
 (require 'magh-pr)
 (require 'magh-repo)
+(require 'magh-topic)
 (require 'magh-dispatch)
 (require 'magh-ui)
 
@@ -204,96 +205,53 @@ When FORCE is non-nil, bypass the shared query cache."
   (let* ((old (gethash key magh-magit--cache))
          (generation (cl-incf magh-magit--generation))
          (tasks (magh-magit--task-keys sections))
-         (remaining (length tasks))
-         (data (copy-alist (plist-get old :data)))
-         errors)
+         (data (copy-alist (plist-get old :data))))
     (puthash key
              (list :loading t :generation generation :data data
                    :errors nil :created (plist-get old :created))
              magh-magit--cache)
-    (dolist (task tasks)
-      (magh-magit--task
-       task context
-       (lambda (value)
-         (setf (alist-get task data) value)
-         (when (zerop (cl-decf remaining))
-           (magh-magit--finish-request key generation data errors)))
-       (lambda (request-error)
-         (push (cons task request-error) errors)
-         (when (zerop (cl-decf remaining))
-           (magh-magit--finish-request key generation data errors)))
-       force))))
+    (magh-core--collect-async-settled
+     (mapcar
+      (lambda (task)
+        (cons task
+              (lambda (success error)
+                (magh-magit--task task context success error force))))
+      tasks)
+     (lambda (result)
+       (dolist (entry (magh-batch-result-values result))
+         (setf (alist-get (car entry) data) (cdr entry)))
+       (magh-magit--finish-request
+        key generation data (magh-batch-result-errors result))))))
 
 (defun magh-magit--resource (kind context data)
   "Create a KIND resource from summary DATA and CONTEXT."
   (when-let* ((name (alist-get 'nameWithOwner (alist-get 'repository data))))
     (setq context (magh-context-from-repository name (magh-context-host context))))
   (pcase kind
-    ('pr (magh-pr--resource context data))
-    ('issue (magh-issue--resource context data))
+    ((or 'pr 'issue) (magh-topic--resource kind context data))
     ('run (magh-actions--run-resource context data))))
 
 (defun magh-magit--insert-topic (kind context data)
   "Insert one Issue or Pull Request DATA row of KIND in CONTEXT."
   (let* ((resource (magh-magit--resource kind context data))
          (number (alist-get 'number data))
-         (state (if (alist-get 'isDraft data)
-                    "DRAFT" (alist-get 'state data)))
-         (title (alist-get 'title data))
          (repo (plist-get resource :repository))
-         (author (magh-core--name (alist-get 'author data)))
-         (review (and (eq kind 'pr)
-                      (alist-get 'reviewDecision data))))
+         (values (magh-topic--row-values kind data)))
     (magh-ui--section (magh-topic (cons repo number) resource t)
       (magh-ui--row
-       (magh-ui--styled (upcase state) (magh-core--state-face state))
-       (and review (magh-ui--styled review (magh-core--state-face review)))
-       (magh-ui--styled (format "#%s" number) 'magh-resource-number)
-       (magh-ui--styled title 'magh-resource-title)
+       (plist-get values :state) (plist-get values :review)
+       (plist-get values :identifier) (plist-get values :title)
        (and (eq magh-magit-summary-scope 'user)
             (magh-ui--styled (format "[%s]" repo) 'magh-repository)))
-      (magh-ui--insert-header "Author" author 'magh-author)
-      (when (eq kind 'pr)
-        (when-let* ((head (alist-get 'headRefName data))
-                    (base (alist-get 'baseRefName data)))
-          (magh-ui--insert-header "Branches" (format "%s → %s" head base)
-                                'magh-branch))
-        (when review
-          (magh-ui--insert-header "Review" review
-                                (magh-core--state-face review))))
-      (magh-ui--insert-header "Labels"
-                            (magh-core--names
-                             (alist-get 'labels data))
-                            'magh-label)
-      (when (eq kind 'issue)
-        (magh-ui--insert-header
-         "Assigned"
-         (magh-core--names (alist-get 'assignees data)) 'magh-author))
-      (magh-ui--insert-header "Comments" (magh-core--comments-count data))
-      (magh-ui--insert-header "Updated"
-                            (magh-core--date (alist-get 'updatedAt data))
-                            'magh-date))))
+      (magh-topic--insert-metadata kind data :details t))))
 
 (defun magh-magit--insert-run (context data)
   "Insert one Actions run DATA row in CONTEXT."
   (let* ((resource (magh-magit--resource 'run context data))
-         (id (plist-get resource :id))
-         (state (or (alist-get 'conclusion data)
-                    (alist-get 'status data))))
+         (id (plist-get resource :id)))
     (magh-ui--section (magh-run id resource t)
-      (magh-ui--row
-       (magh-ui--styled (upcase state) (magh-core--state-face state))
-       (magh-ui--styled (alist-get 'displayTitle data)
-                      'magh-resource-title)
-       (magh-ui--styled (or (alist-get 'workflowName data)
-                          (alist-get 'name data))
-                      'magh-workflow))
-      (magh-ui--insert-header "Branch"
-                            (alist-get 'headBranch data) 'magh-branch)
-      (magh-ui--insert-header "Event" (alist-get 'event data))
-      (magh-ui--insert-header "Created"
-                            (magh-core--date (alist-get 'createdAt data))
-                            'magh-date))))
+      (magh-actions--run-row data)
+      (magh-actions--insert-run-metadata data))))
 
 (defun magh-magit--insert-group (heading kind context items)
   "Insert HEADING containing KIND rows from ITEMS in CONTEXT."

@@ -16,9 +16,13 @@
 (require 'seq)
 (require 'subr-x)
 (require 'transient)
+(require 'magh-actions)
 (require 'magh-api)
 (require 'magh-candidate)
+(require 'magh-commit)
 (require 'magh-edit)
+(require 'magh-release)
+(require 'magh-topic)
 (require 'magh-ui)
 
 (declare-function magh-project-list "magh-project")
@@ -112,117 +116,44 @@
           (lambda (ok fail) (magh-api--release-list context ok fail force))))
    success))
 
-(defun magh-repo--topic-resource (kind context data)
-  "Create a resource of KIND in CONTEXT from DATA."
+(defun magh-repo--insert-topic (kind context data)
+  "Insert compact KIND summary from DATA in CONTEXT."
   (pcase kind
     ((or 'issue 'pr)
-     (magh-resource-create
-      kind context :number (alist-get 'number data)
-      :title (alist-get 'title data)
-      :url (alist-get 'url data)))
+     (let* ((resource (magh-topic--resource kind context data))
+            (number (plist-get resource :number))
+            (values (magh-topic--row-values kind data)))
+       (magh-ui--section (topic (list kind number) resource t)
+         (magh-ui--format-row
+          values (if (eq kind 'pr)
+                     '(:state :review :identifier :title)
+                   '(:state :identifier :title)))
+         (when (eq kind 'pr)
+           (magh-topic--insert-pr-branches data))
+         (magh-topic--insert-metadata kind data))))
     ('run
-     (magh-resource-create
-      'run context :id (alist-get 'databaseId data)
-      :title (alist-get 'displayTitle data)
-      :url (alist-get 'url data)))
+     (let* ((resource (magh-actions--run-resource context data))
+            (id (plist-get resource :id)))
+       (magh-ui--section (topic (list kind id) resource t)
+         (magh-actions--run-row data)
+         (magh-actions--insert-run-metadata
+          data :date-label "Updated"
+          :date (or (alist-get 'updatedAt data)
+                    (alist-get 'createdAt data))))))
     ('release
-     (magh-resource-create
-      'release context :tag (alist-get 'tagName data)
-      :title (or (alist-get 'name data)
-                 (alist-get 'tagName data))
-      :url (alist-get 'url data)))))
-
-(defun magh-repo--insert-topic (kind context data)
-  "Insert compact KIND topic from DATA in CONTEXT."
-  (let* ((resource (magh-repo--topic-resource kind context data))
-         (number (alist-get 'number data))
-         (state (or (and (alist-get 'isDraft data) "DRAFT")
-                    (and (alist-get 'isPrerelease data) "PRERELEASE")
-                    (alist-get 'conclusion data)
-                    (alist-get 'status data)
-                    (alist-get 'state data)
-                    (and (eq kind 'release) "PUBLISHED")))
-         (title (or (alist-get 'title data)
-                    (alist-get 'displayTitle data)
-                    (alist-get 'name data)
-                    (alist-get 'tagName data)))
-         (author (magh-core--name (alist-get 'author data)))
-         (review (alist-get 'reviewDecision data))
-         (workflow (or (alist-get 'workflowName data)
-                       (and (eq kind 'run) (alist-get 'name data))))
-         (comment-count (magh-core--comments-count data))
-         (updated (or (alist-get 'updatedAt data)
-                      (alist-get 'publishedAt data)
-                      (alist-get 'createdAt data)))
-         (identifier
-          (pcase kind
-            ((or 'issue 'pr)
-             (magh-ui--styled (format "#%s" number) 'magh-resource-number))
-            ('release
-             (magh-ui--styled (alist-get 'tagName data) 'magh-tag))))
-         (key (or number (plist-get resource :id) (plist-get resource :tag))))
-    (magh-ui--section (topic (list kind key) resource t)
-      (magh-ui--format-row
-       (list :state (and (not (eq kind 'release))
-                         (magh-ui--styled (upcase state)
-                                        (magh-core--state-face state)))
-             :identifier identifier
-             :title (magh-ui--styled title 'magh-resource-title)
-             :author (magh-ui--styled author 'magh-author)
-             :review (magh-ui--styled review (magh-core--state-face review))
-             :workflow (magh-ui--styled workflow 'magh-workflow)
-             :updated (magh-ui--styled (magh-core--date updated) 'magh-date))
-       (pcase kind
-         ('pr '(:state :review :identifier :title))
-         ('issue '(:state :identifier :title))
-         ('run '(:state :title :workflow))
-         ('release '(:identifier :title))))
-      (when (eq kind 'pr)
-        (magh-ui--insert-header
-         "Branches" (format "%s → %s"
-                            (alist-get 'headRefName data)
-                            (alist-get 'baseRefName data))
-         'magh-branch))
-      (when (eq kind 'run)
-        (magh-ui--insert-header "Branch" (alist-get 'headBranch data)
-                              'magh-branch)
-        (magh-ui--insert-header "Event" (alist-get 'event data))
-        (magh-ui--insert-header "Updated" (magh-core--date updated) 'magh-date))
-      (when (memq kind '(issue pr))
-        (magh-ui--insert-header "Author" author 'magh-author)
-        (magh-ui--insert-header
-         "Labels" (magh-core--names (alist-get 'labels data)) 'magh-label)
-        (when (eq kind 'issue)
-          (magh-ui--insert-header
-           "Assigned" (magh-core--names (alist-get 'assignees data))
-           'magh-author))
-        (magh-ui--insert-header "Comments" comment-count)
-        (magh-ui--insert-header "Updated" (magh-core--date updated) 'magh-date))
-      (when (eq kind 'release)
-        (magh-ui--insert-header "State" (downcase state)
-                              (magh-core--state-face state))
-        (magh-ui--insert-header "Author" author 'magh-author)))))
-
-(defun magh-repo--insert-commit (context data)
-  "Insert recent Commit DATA in CONTEXT."
-  (let* ((sha (alist-get 'sha data))
-         (commit (alist-get 'commit data))
-         (message (alist-get 'message commit))
-         (author (or (magh-core--name (alist-get 'author data))
-                     (magh-core--name (alist-get 'author commit))))
-         (resource (magh-resource-create
-                    'commit context :sha sha
-                    :title (car (string-lines message))
-                    :url (alist-get 'html_url data))))
-    (magh-ui--section (commit sha resource t)
-      (magh-ui--row
-       (magh-ui--styled (string-limit sha 10) 'magh-hash)
-       (magh-ui--styled (magh-resource-title resource) 'magh-resource-title)
-       (magh-ui--styled author 'magh-author)
-       (magh-ui--styled
-        (magh-core--date (alist-get 'date (alist-get 'author commit))) 'magh-date))
-      (magh-ui--insert-header "SHA" sha 'magh-hash)
-      (magh-ui--insert-header "Author" author 'magh-author))))
+     (let* ((resource (magh-release--resource context data))
+            (tag (plist-get resource :tag))
+            (state (magh-release--state data)))
+       (magh-ui--section (topic (list kind tag) resource t)
+         (magh-ui--row
+          (magh-ui--styled tag 'magh-tag)
+          (magh-ui--styled (magh-resource-title resource)
+                           'magh-resource-title))
+         (magh-ui--insert-header "State" state
+                                 (magh-core--state-face state))
+         (magh-ui--insert-header
+          "Author" (magh-core--name (alist-get 'author data)) 'magh-author))))
+    (_ (error "Unsupported repository summary kind: %s" kind))))
 
 (defun magh-repo--insert-languages (languages)
   "Insert language percentages from LANGUAGES without byte counts."
@@ -349,7 +280,7 @@ FORKED is non-nil when the current viewer owns a fork of REPO."
       "Recent commits"
       (if-let* ((error (magh-batch-error result 'commits)))
           (magh-ui--insert-request-error error)
-        (dolist (item commits) (magh-repo--insert-commit context item))))
+        (dolist (item commits) (magh-commit--insert-row context item))))
     (magh-ui--section (pull-requests 'pull-requests
                                    (magh-resource-create 'pr-list context) nil)
       "Pull requests"

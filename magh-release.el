@@ -287,8 +287,7 @@
   (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
     (magh-api--release-edit
      context tag '(:draft :json-false)
-     (lambda (_) (message "Published %s" tag)
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message "Published %s" tag)
      #'magh-core--user-error)))
 
 (defun magh-release-mark-latest (&optional context tag)
@@ -297,8 +296,7 @@
   (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
     (magh-api--release-edit
      context tag '(:latest t)
-     (lambda (_) (message "%s is now latest" tag)
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message "%s is now latest" tag)
      #'magh-core--user-error)))
 
 (defun magh-release-toggle-prerelease (&optional context tag)
@@ -311,8 +309,8 @@
        (let ((enable (not (alist-get 'isPrerelease data))))
          (magh-api--release-edit
           context tag (list :prerelease (or enable :json-false))
-          (lambda (_) (message "Prerelease %s" (if enable "enabled" "disabled"))
-            (magh-ui--refresh-if-page))
+          (magh-ui--refresh-message
+           "Prerelease %s" (if enable "enabled" "disabled"))
           #'magh-core--user-error)))
      #'magh-core--user-error)))
 
@@ -349,8 +347,7 @@
   (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
     (magh-api--release-upload
      context tag files clobber
-     (lambda (_) (message "Uploaded %d asset(s)" (length files))
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message "Uploaded %d asset(s)" (length files))
      #'magh-core--user-error)))
 
 (transient-define-prefix magh-release-dispatch ()

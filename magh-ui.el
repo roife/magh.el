@@ -361,10 +361,37 @@ LABEL names the resource in progress messages."
              (setq magh-ui--page-loading nil)
              (magh-core--user-error error))))))))
 
+(cl-defun magh-ui--insert-paged-items
+    (context data insert-item more-kind
+             &key empty-message more-message end-format)
+  "Insert paginated DATA in CONTEXT using INSERT-ITEM.
+MORE-KIND identifies the resource inserted for the continuation section.
+EMPTY-MESSAGE, MORE-MESSAGE, and END-FORMAT control status text; END-FORMAT
+receives the number of loaded items.  Plain lists are accepted as final pages."
+  (let ((items (if (magh-page-p data) (magh-page-items data) data))
+        (next (and (magh-page-p data) (magh-page-next data))))
+    (if items
+        (dolist (item items) (funcall insert-item item))
+      (insert (propertize (concat empty-message "\n")
+                          'font-lock-face 'shadow)))
+    (if next
+        (magh-ui--section
+            (more 'more (magh-resource-create more-kind context) t)
+          (format "Load next page (%d loaded)" (length items))
+          (insert more-message "\n"))
+      (insert (propertize (concat (format end-format (length items)) "\n")
+                          'font-lock-face 'shadow)))))
+
 (defun magh-ui--refresh-if-page ()
   "Refresh the current buffer when it is a native magh.el page."
   (when (derived-mode-p 'magh-section-mode)
     (magh-ui-refresh t)))
+
+(defun magh-ui--refresh-message (format-string &rest arguments)
+  "Return a success callback that reports and refreshes a native page."
+  (lambda (&rest _)
+    (message "%s" (apply #'format format-string arguments))
+    (magh-ui--refresh-if-page)))
 
 (cl-defun magh-ui--open-page
     (name context kind id fetch render &key preview setup)
@@ -476,6 +503,37 @@ matches ordinary Magit section headings and the layouts in doc/UI.md."
                    (unless (string-empty-p text) text))))
              values)
    " "))
+
+(cl-defun magh-ui--conversation-heading
+    (kind author date &key state suffix)
+  "Return a standard conversation heading.
+KIND, AUTHOR, and DATE are the primary fields.  STATE appears after the author,
+and SUFFIX is appended after the date with a middle-dot separator."
+  (concat
+   (or (magh-ui--styled kind 'magh-conversation-kind) "")
+   " by " (or (magh-ui--styled author 'magh-author) "")
+   (if state
+       (concat " " (or (magh-ui--styled state (magh-core--state-face state)) ""))
+     "")
+   (if date (concat " · " (or (magh-ui--styled date 'magh-date) "")) "")
+   (if suffix (concat " · " suffix) "")))
+
+(defun magh-ui--diff-heading (text faces)
+  "Return TEXT as a full-line diff heading carrying FACES."
+  (let ((heading (if (string-suffix-p "\n" text) text (concat text "\n"))))
+    (dolist (face (ensure-list faces))
+      (font-lock-append-text-property
+       0 (length heading) 'font-lock-face face heading))
+    heading))
+
+(defun magh-ui--diff-file-heading (text)
+  "Return file heading TEXT with Magit's diff file background faces."
+  (magh-ui--diff-heading
+   text '(magit-diff-file-heading magit-diff-file-heading-highlight)))
+
+(defun magh-ui--diff-hunk-heading (text)
+  "Return hunk heading TEXT with Magit's diff hunk background face."
+  (magh-ui--diff-heading text 'magit-diff-hunk-heading))
 
 (defun magh-ui--format-row (values &optional fields)
   "Join semantic FIELDS from plist VALUES without fixed-width columns."

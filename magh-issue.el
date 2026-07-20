@@ -19,6 +19,7 @@
 (require 'magh-api)
 (require 'magh-candidate)
 (require 'magh-edit)
+(require 'magh-topic)
 (require 'magh-ui)
 
 (defvar-local magh-issue--state nil)
@@ -28,10 +29,7 @@
 
 (defun magh-issue--resource (context data)
   "Create an Issue resource from DATA in CONTEXT."
-  (magh-resource-create
-   'issue context :number (alist-get 'number data)
-   :title (alist-get 'title data)
-   :url (alist-get 'url data)))
+  (magh-topic--resource 'issue context data))
 
 (defun magh-issue--buffer-name (context &optional number)
   "Return Issue buffer name for CONTEXT and optional NUMBER."
@@ -41,13 +39,7 @@
 
 (defun magh-issue--row-values (data)
   "Return display plist for Issue DATA."
-  (let ((state (alist-get 'state data)))
-    (list :state (magh-ui--styled (upcase state) (magh-core--state-face state))
-          :identifier (magh-ui--styled
-                       (format "#%s" (alist-get 'number data))
-                       'magh-resource-number)
-          :title (magh-ui--styled (alist-get 'title data)
-                                'magh-resource-title))))
+  (magh-topic--row-values 'issue data))
 
 (defun magh-issue--insert-row (context data)
   "Insert a native Issue row from DATA."
@@ -55,42 +47,20 @@
          (number (plist-get resource :number)))
     (magh-ui--section (issue number resource t)
       (magh-ui--format-row (magh-issue--row-values data))
-      (magh-ui--insert-header "Author"
-                            (magh-core--name (alist-get 'author data))
-                            'magh-author)
-      (magh-ui--insert-header "Labels"
-                            (magh-core--names (alist-get 'labels data))
-                            'magh-label)
-      (magh-ui--insert-header "Assigned"
-                            (magh-core--names (alist-get 'assignees data))
-                            'magh-author)
-      (magh-ui--insert-header "Comments"
-                            (magh-core--comments-count data))
-      (magh-ui--insert-header "Created"
-                            (magh-core--date (alist-get 'createdAt data))
-                            'magh-date)
-      (magh-ui--insert-header "Updated"
-                            (magh-core--date (alist-get 'updatedAt data))
-                            'magh-date))))
+      (magh-topic--insert-metadata 'issue data :details t :created t))))
 
 (defun magh-issue--render-list (context state data)
   "Render Issue list DATA for CONTEXT and STATE."
-  (let ((items (if (magh-page-p data) (magh-page-items data) data))
-        (next (and (magh-page-p data) (magh-page-next data))))
-    (magh-ui--insert-header "Repository" (magh-context-repository context)
+  (magh-ui--insert-header "Repository" (magh-context-repository context)
                           'magh-repository
                           (magh-resource-create 'repository context))
-    (magh-ui--insert-header "Issues" state)
-    (insert "\n")
-    (if items
-        (dolist (issue items) (magh-issue--insert-row context issue))
-      (insert (propertize "No matching issues.\n" 'font-lock-face 'shadow)))
-    (if next
-        (magh-ui--section (more 'more (magh-resource-create 'issue-more context) t)
-          (format "Load next page (%d loaded)" (length items))
-          (insert "Press RET to append more issues.\n"))
-      (insert (propertize (format "End of list (%d items).\n" (length items))
-                          'font-lock-face 'shadow)))))
+  (magh-ui--insert-header "Issues" state)
+  (insert "\n")
+  (magh-ui--insert-paged-items
+   context data (lambda (issue) (magh-issue--insert-row context issue))
+   'issue-more :empty-message "No matching issues."
+   :more-message "Press RET to append more issues."
+   :end-format "End of list (%d items)."))
 
 ;;;###autoload
 (defun magh-issue-list (&optional context state params)
@@ -145,11 +115,7 @@
          (url (alist-get 'url comment))
          (resource (magh-resource-create 'comment context :id id :url url)))
     (magh-ui--section (comment id resource nil)
-      (concat (magh-ui--styled "Comment" 'magh-conversation-kind)
-              " by "
-              (magh-ui--styled author 'magh-author)
-              " · "
-              (magh-ui--styled created 'magh-date))
+      (magh-ui--conversation-heading "Comment" author created)
       (magh-ui--insert-markdown (alist-get 'body comment) context))))
 
 (defun magh-issue--render-view (context data)
@@ -240,22 +206,7 @@
 
 (defun magh-issue--editor-fields (context)
   "Return Issue editor fields for CONTEXT."
-  (let ((assignees (magh-edit--completion-fetcher
-                    #'magh-api--repo-collaborators context 'login))
-        (labels (magh-edit--completion-fetcher
-                 #'magh-api--repo-labels context 'name))
-        (milestones (magh-edit--completion-fetcher
-                     #'magh-api--repo-milestones context 'title))
-        (projects (magh-edit--completion-fetcher
-                   #'magh-api--project-list context 'title)))
-    `((:name title :required t)
-      (:name assignees :multiple t
-       :completion-fetch ,assignees)
-      (:name labels :multiple t
-       :completion-fetch ,labels)
-      (:name milestone :completion-fetch ,milestones)
-      (:name projects :multiple t
-       :completion-fetch ,projects))))
+  (cons '(:name title :required t) (magh-topic--editor-fields context)))
 
 (defun magh-issue--template-values (text)
   "Parse Markdown issue template TEXT into (VALUES BODY)."
@@ -329,11 +280,8 @@
 
 (defun magh-issue--edit-values (data)
   "Convert Issue DATA to structured edit values."
-  (list :title (alist-get 'title data)
-        :assignees (mapcar #'magh-core--name (alist-get 'assignees data))
-        :labels (mapcar #'magh-core--name (alist-get 'labels data))
-        :milestone (magh-core--name (alist-get 'milestone data))
-        :projects (mapcar #'magh-core--name (alist-get 'projectItems data))))
+  (append (list :title (alist-get 'title data))
+          (magh-topic--edit-values data)))
 
 (defun magh-issue--open-edit-editor (context number data)
   "Open editor for Issue NUMBER using DATA."
@@ -344,26 +292,11 @@
      (magh-issue--editor-fields context) original
      (alist-get 'body data)
      (lambda (values body success error)
-       (let* ((old-milestone (plist-get original :milestone))
-              (new-milestone (plist-get values :milestone))
-              (changes (list :title (plist-get values :title) :body body)))
-         (unless (equal old-milestone new-milestone)
-           (setq changes
-                 (if new-milestone
-                     (plist-put changes :milestone new-milestone)
-                   (plist-put changes :remove-milestone t))))
-         (dolist (spec '((:assignees :add-assignees :remove-assignees)
-                         (:labels :add-labels :remove-labels)
-                         (:projects :add-projects :remove-projects)))
-           (let ((old (plist-get original (car spec)))
-                 (new (plist-get values (car spec))))
-             (setq changes
-                   (plist-put changes (nth 1 spec)
-                              (seq-difference new old #'string=)))
-             (setq changes
-                   (plist-put changes (nth 2 spec)
-                              (seq-difference old new #'string=)))))
-         (magh-api--issue-edit context number changes success error))))))
+       (magh-api--issue-edit
+        context number
+        (magh-topic--edit-changes
+         original values (list :title (plist-get values :title) :body body))
+        success error)))))
 
 ;;;###autoload
 (defun magh-issue-edit (&optional context number)
@@ -396,8 +329,7 @@
   (interactive (list (read-string "Comment: ")))
   (pcase-let ((`(,context ,number) (magh-issue--current context number)))
     (magh-api--issue-comment context number body
-                           (lambda (_) (message "Comment added")
-                             (magh-ui--refresh-if-page))
+                           (magh-ui--refresh-message "Comment added")
                            #'magh-core--user-error)))
 
 (defun magh-issue-close (&optional context number)
@@ -410,8 +342,7 @@
             (comment (read-string "Closing comment (optional): ")))
         (magh-api--issue-close
          context number reason (unless (string-empty-p comment) comment)
-         (lambda (_) (message "Issue #%s closed" number)
-           (magh-ui--refresh-if-page))
+         (magh-ui--refresh-message "Issue #%s closed" number)
          #'magh-core--user-error)))))
 
 (defun magh-issue-reopen (&optional context number)
@@ -421,8 +352,7 @@
     (let ((comment (read-string "Reopen comment (optional): ")))
       (magh-api--issue-reopen
        context number (unless (string-empty-p comment) comment)
-       (lambda (_) (message "Issue #%s reopened" number)
-         (magh-ui--refresh-if-page))
+       (magh-ui--refresh-message "Issue #%s reopened" number)
        #'magh-core--user-error))))
 
 (defun magh-issue-pin (&optional unpin context number)
@@ -431,8 +361,8 @@
   (pcase-let ((`(,context ,number) (magh-issue--current context number)))
     (magh-api--issue-pin
      context number (not unpin)
-     (lambda (_) (message "Issue #%s %s" number (if unpin "unpinned" "pinned"))
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message
+      "Issue #%s %s" number (if unpin "unpinned" "pinned"))
      #'magh-core--user-error)))
 
 (defun magh-issue-lock (&optional unlock context number)
@@ -445,9 +375,8 @@
                                         nil t))))
       (magh-api--issue-lock
        context number (not unlock) (unless (string-empty-p (or reason "")) reason)
-       (lambda (_) (message "Issue #%s %s" number
-                            (if unlock "unlocked" "locked"))
-         (magh-ui--refresh-if-page))
+       (magh-ui--refresh-message
+        "Issue #%s %s" number (if unlock "unlocked" "locked"))
        #'magh-core--user-error))))
 
 ;;;###autoload

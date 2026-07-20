@@ -352,9 +352,8 @@ With INCLUDE-CLOSED, include closed Projects."
               (magh-core--confirm (format "Close Project #%s? " number)))
       (magh-api--project-close
        context owner number (not closed)
-       (lambda (_)
-         (message "Project #%s %s" number (if closed "reopened" "closed"))
-         (magh-ui--refresh-if-page))
+       (magh-ui--refresh-message
+        "Project #%s %s" number (if closed "reopened" "closed"))
        #'magh-core--user-error))))
 
 ;;;###autoload
@@ -367,8 +366,7 @@ With INCLUDE-CLOSED, include closed Projects."
     (setq url (or url (read-string "Issue or Pull Request URL: ")))
     (magh-api--project-item-add
      context owner number url
-     (lambda (_) (message "Added item to Project #%s" number)
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message "Added item to Project #%s" number)
      #'magh-core--user-error)))
 
 ;;;###autoload
@@ -446,9 +444,8 @@ When ARCHIVED is explicitly nil with a non-nil RESOURCE, restore it."
    (magh-project--item-context resource) (magh-project--item-owner resource)
    (magh-project--item-project-number resource)
    (or (plist-get resource :project-item-id) (plist-get resource :id)) archived
-   (lambda (_) (message "Project item %s"
-                    (if archived "archived" "restored"))
-     (magh-ui--refresh-if-page))
+   (magh-ui--refresh-message
+    "Project item %s" (if archived "archived" "restored"))
    #'magh-core--user-error))
 
 ;;;###autoload
@@ -461,8 +458,7 @@ When ARCHIVED is explicitly nil with a non-nil RESOURCE, restore it."
      (magh-project--item-context resource) (magh-project--item-owner resource)
      (magh-project--item-project-number resource)
      (or (plist-get resource :project-item-id) (plist-get resource :id))
-     (lambda (_) (message "Removed item from Project")
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message "Removed item from Project")
      #'magh-core--user-error)))
 
 (defun magh-project--editable-fields ()
@@ -532,8 +528,8 @@ When ARCHIVED is explicitly nil with a non-nil RESOURCE, restore it."
          (plist-get item-resource :id))
      (alist-get 'id field) (alist-get 'dataType field)
      (car selection) (cadr selection)
-     (lambda (_) (message "Updated Project field %s" (alist-get 'name field))
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message
+      "Updated Project field %s" (alist-get 'name field))
      #'magh-core--user-error)))
 
 (transient-define-prefix magh-project-list-dispatch ()

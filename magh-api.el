@@ -315,6 +315,18 @@ Each entry is (KEY FLAG KIND), where KIND is `repeat', `switch', `boolean',
    :force force :transform (or transform #'magh-api--flatten-pages)
    :domain domain))
 
+(cl-defun magh-api--read-repo-rest-pages
+    (context path resource callback errback
+             &key force fields id transform headers)
+  "Read repository REST pages at PATH in CONTEXT.
+RESOURCE and optional ID identify the cache domain.  FIELDS defaults to a
+100-item page size; TRANSFORM and HEADERS are forwarded to the REST reader."
+  (setq context (magh-api--context context t))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context path)
+   (or fields '((per_page . 100))) callback errback force
+   (magh-api--domain context resource id) transform headers))
+
 (defun magh-api--decode-content (data)
   "Decode GitHub Contents API DATA as UTF-8 text."
   (let ((content (alist-get 'content data)))
@@ -437,41 +449,31 @@ HEADERS is a list of complete header strings."
 
 (defun magh-api--repo-branches (context callback errback &optional force)
   "Fetch repository branches."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context "branches")
-   `((per_page . ,(min 100 magh-list-limit))) callback errback force
-   (magh-api--domain context 'branch)))
+  (magh-api--read-repo-rest-pages
+   context "branches" 'branch callback errback :force force
+   :fields `((per_page . ,(min 100 magh-list-limit)))))
 
 (defun magh-api--repo-tags (context callback errback &optional force)
   "Fetch repository tags."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context "tags")
-   `((per_page . ,(min 100 magh-list-limit))) callback errback force
-   (magh-api--domain context 'tag)))
+  (magh-api--read-repo-rest-pages
+   context "tags" 'tag callback errback :force force
+   :fields `((per_page . ,(min 100 magh-list-limit)))))
 
 (defun magh-api--repo-labels (context callback errback &optional force)
   "Fetch labels available in CONTEXT."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context "labels") '((per_page . 100))
-   callback errback force (magh-api--domain context 'label)))
+  (magh-api--read-repo-rest-pages
+   context "labels" 'label callback errback :force force))
 
 (defun magh-api--repo-milestones (context callback errback &optional force)
   "Fetch open milestones available in CONTEXT."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context "milestones")
-   '((state . "open") (per_page . 100)) callback errback force
-   (magh-api--domain context 'milestone)))
+  (magh-api--read-repo-rest-pages
+   context "milestones" 'milestone callback errback :force force
+   :fields '((state . "open") (per_page . 100))))
 
 (defun magh-api--repo-collaborators (context callback errback &optional force)
   "Fetch assignable repository collaborators."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context "assignees") '((per_page . 100))
-   callback errback force (magh-api--domain context 'collaborator)))
+  (magh-api--read-repo-rest-pages
+   context "assignees" 'collaborator callback errback :force force))
 
 (defun magh-api--project-owner (context &optional owner)
   "Return explicit OWNER, CONTEXT owner, or the current account marker."
@@ -861,6 +863,60 @@ data type.  VALUE is ignored when CLEAR is non-nil."
      :transform #'magh-api--topic-page-transform
      :stdin (magh-api--graphql-payload magh-api--topic-page-query variables))))
 
+(defun magh-api--topic-list
+    (context kind params default-state fields specs callback errback force)
+  "Fetch CLI topic KIND using PARAMS, FIELDS, and argument SPECS."
+  (setq context (magh-api--context context t))
+  (magh-api--read-json
+   context
+   (append
+    (list (symbol-name kind) "list"
+          "--state" (or (plist-get params :state) default-state)
+          "--limit" (number-to-string
+                      (or (plist-get params :limit) magh-list-limit))
+          "--json" (magh-api--fields fields))
+    (magh-api--plist-args params specs)
+    (magh-api--repo-args context))
+   callback errback :force force :domain (magh-api--domain context kind)))
+
+(defun magh-api--topic-get
+    (context kind number fields callback errback force)
+  "Fetch topic KIND NUMBER with FIELDS in CONTEXT."
+  (setq context (magh-api--context context t))
+  (magh-api--read-json
+   context
+   (append (list (symbol-name kind) "view" (number-to-string number)
+                 "--json" (magh-api--fields fields))
+           (magh-api--repo-args context))
+   callback errback :force force
+   :domain (magh-api--domain context kind number)))
+
+(defun magh-api--topic-edit
+    (context kind number values extra-args callback errback)
+  "Edit topic KIND NUMBER using VALUES and EXTRA-ARGS."
+  (setq context (magh-api--context context t))
+  (let ((bodyp (plist-member values :body)))
+    (magh-api--mutate-text
+     context
+     (append (list (symbol-name kind) "edit" (number-to-string number))
+             (magh-api--flag "--title" (plist-get values :title))
+             extra-args
+             (magh-api--topic-edit-args values)
+             (magh-api--repo-args context))
+     (magh-api--domain context kind) callback errback
+     :stdin (and bodyp (or (plist-get values :body) "")))))
+
+(defun magh-api--topic-comment
+    (context kind number body callback errback)
+  "Comment BODY on topic KIND NUMBER."
+  (setq context (magh-api--context context t))
+  (magh-api--mutate-text
+   context
+   (append (list (symbol-name kind) "comment" (number-to-string number)
+                 "--body-file" "-")
+           (magh-api--repo-args context))
+   (magh-api--domain context kind) callback errback :stdin body))
+
 (defun magh-api--issue-page
     (context params cursor callback errback &optional force)
   "Fetch one cursor-paginated Issue page in CONTEXT."
@@ -869,32 +925,17 @@ data type.  VALUE is ignored when CLEAR is non-nil."
 (defun magh-api--issue-list
     (context params callback errback &optional force)
   "Fetch an Issue list in CONTEXT using PARAMS plist."
-  (setq context (magh-api--context context t))
-  (let ((argv
-         (append
-          (list "issue" "list"
-                "--state" (or (plist-get params :state) magh-default-issue-state)
-                "--limit" (number-to-string
-                            (or (plist-get params :limit) magh-list-limit))
-                "--json" (magh-api--fields magh-api--issue-list-fields))
-          (magh-api--plist-args
-           params '((:search "--search") (:assignee "--assignee")
-                    (:author "--author") (:mention "--mention")
-                    (:milestone "--milestone") (:labels "--label" repeat)))
-          (magh-api--repo-args context))))
-    (magh-api--read-json context argv callback errback :force force
-                       :domain (magh-api--domain context 'issue))))
+  (magh-api--topic-list
+   context 'issue params magh-default-issue-state magh-api--issue-list-fields
+   '((:search "--search") (:assignee "--assignee")
+     (:author "--author") (:mention "--mention")
+     (:milestone "--milestone") (:labels "--label" repeat))
+   callback errback force))
 
 (defun magh-api--issue-get (context number callback errback &optional force)
   "Fetch Issue NUMBER in CONTEXT."
-  (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (append (list "issue" "view" (number-to-string number)
-                 "--json" (magh-api--fields magh-api--issue-view-fields))
-           (magh-api--repo-args context))
-   callback errback :force force
-   :domain (magh-api--domain context 'issue number)))
+  (magh-api--topic-get
+   context 'issue number magh-api--issue-view-fields callback errback force))
 
 (defun magh-api--issue-create (context values callback errback)
   "Create an Issue using VALUES plist."
@@ -913,26 +954,11 @@ data type.  VALUE is ignored when CLEAR is non-nil."
 
 (defun magh-api--issue-edit (context number values callback errback)
   "Edit Issue NUMBER using VALUES plist."
-  (setq context (magh-api--context context t))
-  (let ((bodyp (plist-member values :body)))
-    (magh-api--mutate-text
-     context
-     (append (list "issue" "edit" (number-to-string number))
-             (magh-api--flag "--title" (plist-get values :title))
-             (magh-api--topic-edit-args values)
-             (magh-api--repo-args context))
-     (magh-api--domain context 'issue) callback errback
-     :stdin (and bodyp (or (plist-get values :body) "")))))
+  (magh-api--topic-edit context 'issue number values nil callback errback))
 
 (defun magh-api--issue-comment (context number body callback errback)
   "Comment BODY on Issue NUMBER."
-  (setq context (magh-api--context context t))
-  (magh-api--mutate-text
-   context
-   (append (list "issue" "comment" (number-to-string number)
-                 "--body-file" "-")
-           (magh-api--repo-args context))
-   (magh-api--domain context 'issue) callback errback :stdin body))
+  (magh-api--topic-comment context 'issue number body callback errback))
 
 (defun magh-api--issue-close (context number reason comment callback errback)
   "Close Issue NUMBER with REASON and optional COMMENT."
@@ -999,54 +1025,35 @@ data type.  VALUE is ignored when CLEAR is non-nil."
 
 (defun magh-api--pr-list (context params callback errback &optional force)
   "Fetch Pull Requests in CONTEXT using PARAMS plist."
-  (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (append
-    (list "pr" "list"
-          "--state" (or (plist-get params :state) magh-default-pr-state)
-          "--limit" (number-to-string (or (plist-get params :limit) magh-list-limit))
-          "--json" (magh-api--fields magh-api--pr-list-fields))
-    (magh-api--plist-args
-     params '((:search "--search") (:assignee "--assignee")
-              (:author "--author") (:base "--base") (:head "--head")
-              (:labels "--label" repeat) (:draft "--draft" switch)))
-    (magh-api--repo-args context))
-   callback errback :force force :domain (magh-api--domain context 'pr)))
+  (magh-api--topic-list
+   context 'pr params magh-default-pr-state magh-api--pr-list-fields
+   '((:search "--search") (:assignee "--assignee")
+     (:author "--author") (:base "--base") (:head "--head")
+     (:labels "--label" repeat) (:draft "--draft" switch))
+   callback errback force))
 
 (defun magh-api--pr-get (context number callback errback &optional force)
   "Fetch Pull Request NUMBER in CONTEXT."
-  (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (append (list "pr" "view" (number-to-string number)
-                 "--json" (magh-api--fields magh-api--pr-view-fields))
-           (magh-api--repo-args context))
-   callback errback :force force :domain (magh-api--domain context 'pr number)))
+  (magh-api--topic-get
+   context 'pr number magh-api--pr-view-fields callback errback force))
 
 (defun magh-api--pr-commits (context number callback errback &optional force)
   "Fetch commits belonging to Pull Request NUMBER."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context (format "pulls/%d/commits" number))
-   '((per_page . 100)) callback errback force
-   (magh-api--domain context 'pr-commit number)))
+  (magh-api--read-repo-rest-pages
+   context (format "pulls/%d/commits" number) 'pr-commit callback errback
+   :force force :id number))
 
 (defun magh-api--pr-files (context number callback errback &optional force)
   "Fetch changed files for Pull Request NUMBER."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context (format "pulls/%d/files" number))
-   '((per_page . 100)) callback errback force
-   (magh-api--domain context 'pr-file number)))
+  (magh-api--read-repo-rest-pages
+   context (format "pulls/%d/files" number) 'pr-file callback errback
+   :force force :id number))
 
 (defun magh-api--pr-reviews (context number callback errback &optional force)
   "Fetch submitted reviews for Pull Request NUMBER."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context (format "pulls/%d/reviews" number))
-   '((per_page . 100)) callback errback force
-   (magh-api--domain context 'pr number)))
+  (magh-api--read-repo-rest-pages
+   context (format "pulls/%d/reviews" number) 'pr callback errback
+   :force force :id number))
 
 (defun magh-api--compare (context base head callback errback &optional force)
   "Fetch the repository comparison from BASE through HEAD."
@@ -1065,11 +1072,9 @@ data type.  VALUE is ignored when CLEAR is non-nil."
 (defun magh-api--pr-review-comments
     (context number callback errback &optional force)
   "Fetch inline review comments for Pull Request NUMBER."
-  (setq context (magh-api--context context t))
-  (magh-api--read-rest-pages
-   context (magh-core--repo-endpoint context (format "pulls/%d/comments" number))
-   '((per_page . 100)) callback errback force
-   (magh-api--domain context 'pr-review-comment number)))
+  (magh-api--read-repo-rest-pages
+   context (format "pulls/%d/comments" number) 'pr-review-comment callback errback
+   :force force :id number))
 
 (defun magh-api--pr-review-thread-pages (data)
   "Return review thread metadata nodes from paginated GraphQL DATA."
@@ -1239,27 +1244,13 @@ degrades to readable and replyable threads without resolution capabilities."
 
 (defun magh-api--pr-edit (context number values callback errback)
   "Edit Pull Request NUMBER using VALUES plist."
-  (setq context (magh-api--context context t))
-  (let ((bodyp (plist-member values :body)))
-    (magh-api--mutate-text
-     context
-     (append (list "pr" "edit" (number-to-string number))
-             (magh-api--flag "--title" (plist-get values :title))
-             (magh-api--flag "--base" (plist-get values :base))
-             (magh-api--topic-edit-args values)
-             (magh-api--repo-args context))
-     (magh-api--domain context 'pr) callback errback
-     :stdin (and bodyp (or (plist-get values :body) "")))))
+  (magh-api--topic-edit
+   context 'pr number values
+   (magh-api--flag "--base" (plist-get values :base)) callback errback))
 
 (defun magh-api--pr-comment (context number body callback errback)
   "Add BODY as a Pull Request NUMBER conversation comment."
-  (setq context (magh-api--context context t))
-  (magh-api--mutate-text
-   context
-   (append (list "pr" "comment" (number-to-string number)
-                 "--body-file" "-")
-           (magh-api--repo-args context))
-   (magh-api--domain context 'pr) callback errback :stdin body))
+  (magh-api--topic-comment context 'pr number body callback errback))
 
 (defun magh-api--pr-close (context number comment delete-branch callback errback)
   "Close Pull Request NUMBER with optional COMMENT and DELETE-BRANCH."

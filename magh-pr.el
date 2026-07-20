@@ -21,6 +21,7 @@
 (require 'magh-api)
 (require 'magh-candidate)
 (require 'magh-edit)
+(require 'magh-topic)
 (require 'magh-ui)
 
 (defvar-local magh-pr--state nil)
@@ -45,23 +46,11 @@
 
 (defun magh-pr--resource (context data)
   "Create Pull Request resource from DATA in CONTEXT."
-  (magh-resource-create
-   'pr context :number (alist-get 'number data)
-   :title (alist-get 'title data)
-   :url (alist-get 'url data)))
+  (magh-topic--resource 'pr context data))
 
 (defun magh-pr--row-values (data)
   "Return compact row values for Pull Request DATA."
-  (let ((state (if (alist-get 'isDraft data)
-                   "DRAFT" (alist-get 'state data)))
-        (review (alist-get 'reviewDecision data)))
-    (list :state (magh-ui--styled (upcase state) (magh-core--state-face state))
-          :identifier (magh-ui--styled
-                       (format "#%s" (alist-get 'number data))
-                       'magh-resource-number)
-          :title (magh-ui--styled (alist-get 'title data)
-                                'magh-resource-title)
-          :review (magh-ui--styled review (magh-core--state-face review)))))
+  (magh-topic--row-values 'pr data))
 
 (defun magh-pr--insert-row (context data)
   "Insert Pull Request DATA as a native section row."
@@ -70,49 +59,22 @@
     (magh-ui--section (pr number resource t)
       (magh-ui--format-row (magh-pr--row-values data)
                            '(:state :review :identifier :title))
-      (magh-ui--insert-header
-       "Branches" (format "%s → %s"
-                          (alist-get 'headRefName data)
-                          (alist-get 'baseRefName data))
-       'magh-branch)
-      (magh-ui--insert-header "Author"
-                            (magh-core--name (alist-get 'author data))
-                            'magh-author)
-      (magh-ui--insert-header "Review"
-                            (or (alist-get 'reviewDecision data) "—")
-                            (magh-core--state-face
-                             (alist-get 'reviewDecision data)))
-      (magh-ui--insert-header "Labels"
-                            (magh-core--names (alist-get 'labels data))
-                            'magh-label)
-      (magh-ui--insert-header "Comments"
-                            (magh-core--comments-count data))
-      (magh-ui--insert-header "Created"
-                            (magh-core--date (alist-get 'createdAt data))
-                            'magh-date)
-      (magh-ui--insert-header "Updated"
-                            (magh-core--date (alist-get 'updatedAt data))
-                            'magh-date))))
+      (magh-topic--insert-metadata
+       'pr data :details t :created t :review-placeholder "—"
+       :branches-first t))))
 
 (defun magh-pr--render-list (context state data)
   "Render Pull Request list DATA in CONTEXT for STATE."
-  (let ((items (if (magh-page-p data) (magh-page-items data) data))
-        (next (and (magh-page-p data) (magh-page-next data))))
-    (magh-ui--insert-header "Repository" (magh-context-repository context)
+  (magh-ui--insert-header "Repository" (magh-context-repository context)
                           'magh-repository
                           (magh-resource-create 'repository context))
-    (magh-ui--insert-header "Pull requests" state)
-    (insert "\n")
-    (if items
-        (dolist (pr items) (magh-pr--insert-row context pr))
-      (insert (propertize "No matching pull requests.\n"
-                          'font-lock-face 'shadow)))
-    (if next
-        (magh-ui--section (more 'more (magh-resource-create 'pr-more context) t)
-          (format "Load next page (%d loaded)" (length items))
-          (insert "Press RET to append more pull requests.\n"))
-      (insert (propertize (format "End of list (%d items).\n" (length items))
-                          'font-lock-face 'shadow)))))
+  (magh-ui--insert-header "Pull requests" state)
+  (insert "\n")
+  (magh-ui--insert-paged-items
+   context data (lambda (pr) (magh-pr--insert-row context pr)) 'pr-more
+   :empty-message "No matching pull requests."
+   :more-message "Press RET to append more pull requests."
+   :end-format "End of list (%d items)."))
 
 ;;;###autoload
 (defun magh-pr-list (&optional context state params)
@@ -253,14 +215,9 @@ Inline comments belonging to a submitted review are stored on that review as
           (magh-pr--review-resource
            context number :comment-id id :path path :line line
            :side (or (alist-get 'side data)
-                     (alist-get 'original_side data))))
-         (heading
-          (concat
-           (magh-ui--styled "Inline comment" 'magh-conversation-kind)
-           " by " (or (magh-ui--styled author 'magh-author) "")
-           " · " (or (magh-ui--styled date 'magh-date) ""))))
+                     (alist-get 'original_side data)))))
     (magh-ui--section (inline-comment id resource nil)
-      heading
+      (magh-ui--conversation-heading "Inline comment" author date)
       (when path
         (magh-ui--insert-header
          "Location" (format "%s:%s" path line) 'magh-file resource))
@@ -298,21 +255,15 @@ Inline comments belonging to a submitted review are stored on that review as
                                   (alist-get 'original_side data))))
                       (_ (magh-resource-create 'comment context :id id))))
                    (heading
-                    (concat
-                     (magh-ui--styled
-                      (pcase kind ('review "Review") ('inline "Inline comment")
-                        (_ "Comment"))
-                      'magh-conversation-kind)
-                     " by " (or (magh-ui--styled author 'magh-author) "")
-                     (if state
-                         (concat " " (magh-ui--styled
-                                       state (magh-core--state-face state))) "")
-                     " · " (or (magh-ui--styled date 'magh-date) "")
-                     (if (and (eq kind 'review) inline-comments)
-                         (format " · %d inline comment%s"
-                                 (length inline-comments)
-                                 (if (length= inline-comments 1) "" "s"))
-                       ""))))
+                    (magh-ui--conversation-heading
+                     (pcase kind ('review "Review") ('inline "Inline comment")
+                       (_ "Comment"))
+                     author date :state state
+                     :suffix
+                     (and (eq kind 'review) inline-comments
+                          (format "%d inline comment%s"
+                                  (length inline-comments)
+                                  (if (length= inline-comments 1) "" "s"))))))
         (pcase kind
           ('inline
            (magh-pr--insert-conversation-inline-comment context number data))
@@ -634,26 +585,13 @@ CALLBACK receives template text, or an empty string when no template exists."
 (defun magh-pr--editor-fields (context &optional creating)
   "Return Pull Request editor fields for CONTEXT."
   (let ((branches (magh-edit--completion-fetcher
-                   #'magh-api--repo-branches context 'name))
-        (users (magh-edit--completion-fetcher
-                #'magh-api--repo-collaborators context 'login))
-        (labels (magh-edit--completion-fetcher
-                 #'magh-api--repo-labels context 'name))
-        (milestones (magh-edit--completion-fetcher
-                     #'magh-api--repo-milestones context 'title))
-        (projects (magh-edit--completion-fetcher
-                   #'magh-api--project-list context 'title)))
+                   #'magh-api--repo-branches context 'name)))
     (append
      `((:name title :required t)
        (:name base :required t :completion-fetch ,branches))
      (when creating
        `((:name head :required t :completion-fetch ,branches)))
-     `((:name reviewers :multiple t :completion-fetch ,users)
-       (:name assignees :multiple t :completion-fetch ,users)
-       (:name labels :multiple t :completion-fetch ,labels)
-       (:name milestone :completion-fetch ,milestones)
-       (:name projects :multiple t
-        :completion-fetch ,projects))
+     (magh-topic--editor-fields context t)
      (when creating '((:name draft :type boolean))))))
 
 ;;;###autoload
@@ -679,14 +617,9 @@ CALLBACK receives template text, or an empty string when no template exists."
 
 (defun magh-pr--edit-values (data)
   "Convert Pull Request DATA to editor values."
-  (list :title (alist-get 'title data)
-        :base (alist-get 'baseRefName data)
-        :reviewers (mapcar #'magh-core--name
-                           (alist-get 'reviewRequests data))
-        :assignees (mapcar #'magh-core--name (alist-get 'assignees data))
-        :labels (mapcar #'magh-core--name (alist-get 'labels data))
-        :milestone (magh-core--name (alist-get 'milestone data))
-        :projects (mapcar #'magh-core--name (alist-get 'projectItems data))))
+  (append (list :title (alist-get 'title data)
+                :base (alist-get 'baseRefName data))
+          (magh-topic--edit-values data t)))
 
 (defun magh-pr--open-edit-editor (context number data)
   "Open structured editor for Pull Request NUMBER using DATA."
@@ -696,27 +629,13 @@ CALLBACK receives template text, or an empty string when no template exists."
      (magh-pr--editor-fields context)
      original (alist-get 'body data)
      (lambda (values body success error)
-       (let* ((old-milestone (plist-get original :milestone))
-              (new-milestone (plist-get values :milestone))
-              (changes (list :title (plist-get values :title)
-                             :base (plist-get values :base)
-                             :body body)))
-         (unless (equal old-milestone new-milestone)
-           (setq changes
-                 (if new-milestone
-                     (plist-put changes :milestone new-milestone)
-                   (plist-put changes :remove-milestone t))))
-         (dolist (spec '((:reviewers :add-reviewers :remove-reviewers)
-                         (:assignees :add-assignees :remove-assignees)
-                         (:labels :add-labels :remove-labels)
-                         (:projects :add-projects :remove-projects)))
-           (let ((old (plist-get original (car spec)))
-                 (new (plist-get values (car spec))))
-             (setq changes (plist-put changes (nth 1 spec)
-                                      (seq-difference new old #'string=)))
-             (setq changes (plist-put changes (nth 2 spec)
-                                      (seq-difference old new #'string=)))))
-         (magh-api--pr-edit context number changes success error))))))
+       (magh-api--pr-edit
+        context number
+        (magh-topic--edit-changes
+         original values
+         (list :title (plist-get values :title)
+               :base (plist-get values :base) :body body))
+        success error)))))
 
 ;;;###autoload
 (defun magh-pr-edit (&optional context number)
@@ -767,8 +686,7 @@ CALLBACK receives template text, or an empty string when no template exists."
   (pcase-let ((`(,context ,number) (magh-pr--current context number)))
     (magh-api--pr-comment
      context number body
-     (lambda (_) (message "Comment added")
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message "Comment added")
      #'magh-core--user-error)))
 
 (defun magh-pr-close (&optional context number)
@@ -780,8 +698,7 @@ CALLBACK receives template text, or an empty string when no template exists."
             (delete-branch (y-or-n-p "Delete branch after closing? ")))
         (magh-api--pr-close
          context number (unless (string-empty-p comment) comment) delete-branch
-         (lambda (_) (message "Pull Request #%s closed" number)
-           (magh-ui--refresh-if-page))
+         (magh-ui--refresh-message "Pull Request #%s closed" number)
          #'magh-core--user-error)))))
 
 (defun magh-pr-reopen (&optional context number)
@@ -791,8 +708,7 @@ CALLBACK receives template text, or an empty string when no template exists."
     (let ((comment (read-string "Reopen comment (optional): ")))
       (magh-api--pr-reopen
        context number (unless (string-empty-p comment) comment)
-       (lambda (_) (message "Pull Request #%s reopened" number)
-         (magh-ui--refresh-if-page))
+       (magh-ui--refresh-message "Pull Request #%s reopened" number)
        #'magh-core--user-error))))
 
 (defun magh-pr-checkout (&optional context number)
@@ -822,8 +738,7 @@ CALLBACK receives template text, or an empty string when no template exists."
       (when (magh-core--confirm (format "Merge Pull Request #%s? " number))
         (magh-api--pr-merge
          context number method (list :delete-branch delete-branch)
-         (lambda (_) (message "Pull Request #%s merged" number)
-           (magh-ui--refresh-if-page))
+         (magh-ui--refresh-message "Pull Request #%s merged" number)
          #'magh-core--user-error)))))
 
 (defun magh-pr-lock (&optional unlock context number)
@@ -832,9 +747,8 @@ CALLBACK receives template text, or an empty string when no template exists."
   (pcase-let ((`(,context ,number) (magh-pr--current context number)))
     (magh-api--pr-lock
      context number (not unlock) nil
-     (lambda (_) (message "Pull Request #%s %s" number
-                          (if unlock "unlocked" "locked"))
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message
+      "Pull Request #%s %s" number (if unlock "unlocked" "locked"))
      #'magh-core--user-error)))
 
 (defun magh-pr-ready (&optional draft context number)
@@ -843,9 +757,8 @@ CALLBACK receives template text, or an empty string when no template exists."
   (pcase-let ((`(,context ,number) (magh-pr--current context number)))
     (magh-api--pr-ready
      context number (not draft)
-     (lambda (_) (message "Pull Request #%s marked %s" number
-                          (if draft "draft" "ready"))
-       (magh-ui--refresh-if-page))
+     (magh-ui--refresh-message
+      "Pull Request #%s marked %s" number (if draft "draft" "ready"))
      #'magh-core--user-error)))
 
 (defun magh-pr-auto-merge (&optional disable context number)
@@ -858,8 +771,8 @@ CALLBACK receives template text, or an empty string when no template exists."
                                 nil t)))))
       (magh-api--pr-auto-merge
        context number (not disable) method
-       (lambda (_) (message "Auto-merge %s" (if disable "disabled" "enabled"))
-         (magh-ui--refresh-if-page))
+       (magh-ui--refresh-message
+        "Auto-merge %s" (if disable "disabled" "enabled"))
        #'magh-core--user-error))))
 
 ;;;###autoload
@@ -876,9 +789,8 @@ CALLBACK receives template text, or an empty string when no template exists."
              (message "Pull Request already contains %s" marker)
            (magh-api--pr-edit
             context number (list :body (concat (string-trim-right body)
-                                               "\n\n" marker "\n"))
-            (lambda (_) (message "Linked Issue #%s" issue)
-              (magh-ui--refresh-if-page))
+                                                "\n\n" marker "\n"))
+            (magh-ui--refresh-message "Linked Issue #%s" issue)
             #'magh-core--user-error))))
      #'magh-core--user-error)))
 

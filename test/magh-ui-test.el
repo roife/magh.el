@@ -484,10 +484,10 @@
 
 
 
-(ert-deftest magh-commit-review-patch-parser-maps-lines-and-sides ()
+(ert-deftest magh-review-patch-parser-maps-lines-and-sides ()
   (let* ((context (magh-context-from-repository "o/r"))
          (records
-          (magh-commit--parse-patch-lines
+          (magh-diff--parse-patch-lines
            (concat "@@ -2,3 +2,3 @@\n"
                    " context\n-old\n+new\n"
                    "@@ -10 +10,2 @@\n+next\n context2")
@@ -507,7 +507,7 @@
                      (10 "RIGHT" 2 5)
                      (11 "RIGHT" 2 6))))))
 
-(ert-deftest magh-commit-review-selection-builds-multiline-location ()
+(ert-deftest magh-review-selection-builds-multiline-location ()
   (let ((context (magh-context-from-repository "o/r"))
         (transient-mark-mode t))
     (with-temp-buffer
@@ -521,12 +521,12 @@
       (goto-char (point-min))
       (set-mark (point-max))
       (setq mark-active t)
-      (should (equal (magh-commit--review-selection)
+      (should (equal (magh-review--review-selection)
                      '(:path "src/a.el" :line 5 :side "RIGHT"
                        :subject-type "LINE" :start-line 4
                        :start-side "RIGHT"))))))
 
-(ert-deftest magh-commit-review-selection-rejects-mixed-sides ()
+(ert-deftest magh-review-selection-rejects-mixed-sides ()
   (let ((context (magh-context-from-repository "o/r"))
         (transient-mark-mode t))
     (with-temp-buffer
@@ -540,7 +540,18 @@
       (goto-char (point-min))
       (set-mark (point-max))
       (setq mark-active t)
-      (should-error (magh-commit--review-selection) :type 'user-error))))
+      (should-error (magh-review--review-selection) :type 'user-error))))
+
+(ert-deftest magh-review-browse-tree-uses-review-owned-head ()
+  (let ((context (magh-context-from-repository "o/r"))
+        (magh-review--review-head "review-head")
+        captured)
+    (cl-letf (((symbol-function 'magh-browse-repository)
+               (lambda (received-context ref path)
+                 (setq captured (list received-context ref path)))))
+      (magh-review-browse-tree context))
+    (should (equal (magh-context-repository (car captured)) "o/r"))
+    (should (equal (cdr captured) '("review-head" "")))))
 
 
 
@@ -570,14 +581,14 @@
 
 
 
-(ert-deftest magh-commit-review-submit-failure-preserves-local-drafts ()
+(ert-deftest magh-review-submit-failure-preserves-local-drafts ()
   (let* ((context (magh-context-from-repository "o/r"))
-         (magh-commit--review-drafts (make-hash-table :test #'equal))
-         (key (magh-commit--review-key context 7 "HEAD"))
+         (magh-review--review-drafts (make-hash-table :test #'equal))
+         (key (magh-review--review-key context 7 "HEAD"))
          (draft '(:id 1 :path "src/a.el" :line 1 :side "RIGHT"
                   :subject-type "LINE" :body "Keep me"))
          reported)
-    (puthash key (list draft) magh-commit--review-drafts)
+    (puthash key (list draft) magh-review--review-drafts)
     (cl-letf (((symbol-function 'magh-api--pr-review)
                (lambda (_context _number _event _body _comments
                         _callback errback &optional _head)
@@ -587,11 +598,11 @@
                (lambda (format-string &rest arguments)
                  (setq reported (apply #'format format-string arguments)))))
       (let ((magh-buffer-context context)
-            (magh-commit--review-number 7)
-            (magh-commit--review-head "HEAD"))
-        (magh-commit-review-submit 'approve "")))
+            (magh-review--review-number 7)
+            (magh-review--review-head "HEAD"))
+        (magh-review-submit 'approve "")))
     (should (equal reported "magh: Review failed"))
-    (should (equal (gethash key magh-commit--review-drafts) (list draft)))))
+    (should (equal (gethash key magh-review--review-drafts) (list draft)))))
 
 
 (provide 'magh-ui-test)
