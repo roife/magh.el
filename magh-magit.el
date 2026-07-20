@@ -232,11 +232,11 @@ When FORCE is non-nil, bypass the shared query cache."
     (magh-ui--section (magh-topic (cons repo number) resource t)
       (magh-ui--row
        (magh-ui--styled (upcase state) (magh-core--state-face state))
+       (and review (magh-ui--styled review (magh-core--state-face review)))
        (magh-ui--styled (format "#%s" number) 'magh-resource-number)
        (magh-ui--styled title 'magh-resource-title)
        (and (eq magh-magit-summary-scope 'user)
-            (magh-ui--styled (format "[%s]" repo) 'magh-repository))
-       (and review (magh-ui--styled review (magh-core--state-face review))))
+            (magh-ui--styled (format "[%s]" repo) 'magh-repository)))
       (magh-ui--insert-header "Author" author 'magh-author)
       (when (eq kind 'pr)
         (when-let* ((head (alist-get 'headRefName data))

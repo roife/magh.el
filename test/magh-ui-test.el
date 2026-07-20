@@ -60,6 +60,20 @@
         (should (eq (get-text-property position 'font-lock-face row)
                     (cdr expected)))))))
 
+(ert-deftest magh-pr-list-places-review-decision-after-state ()
+  (let* ((magh-pr--limit 10)
+         (context (magh-context-from-repository "o/r"))
+         (data '(((number . 8) (title . "PR title") (state . "OPEN")
+                  (reviewDecision . "CHANGES_REQUESTED"))
+                 ((number . 9) (title . "No decision") (state . "OPEN"))))
+         (text (magh-test-render-page
+                'pr-list "open"
+                (lambda (items) (magh-pr--render-list context "open" items))
+                data)))
+    (should (string-match-p
+             "OPEN CHANGES_REQUESTED #8 PR title\n" text))
+    (should (string-match-p "OPEN #9 No decision\n" text))))
+
 (ert-deftest magh-search-results-load-only-after-confirmation ()
   (let* ((context (magh-context-from-repository "o/r"))
          (resource
@@ -315,7 +329,7 @@
                 (lambda (data) (magh-repo--render-status context data)) result)))
     (should (string-match-p
              (regexp-quote
-              "OPEN #8 PR title REVIEW_REQUIRED\n")
+              "OPEN REVIEW_REQUIRED #8 PR title\n")
              text))
     (should (string-match-p
              (regexp-quote
@@ -1146,6 +1160,22 @@
       (should (string-match-p "Issues\n" (buffer-string)))
       (should-not (string-match-p "Open Pull Requests" (buffer-string)))
       (should-not (string-match-p "Open Issues" (buffer-string))))))
+
+(ert-deftest magh-magit-pr-places-review-decision-after-state-in-both-scopes ()
+  (let ((context (magh-context-from-repository "o/r"))
+        (data '((number . 8) (title . "PR title") (state . "OPEN")
+                (reviewDecision . "CHANGES_REQUESTED")
+                (repository . ((nameWithOwner . "o/r"))))))
+    (dolist (case '((repository . "OPEN CHANGES_REQUESTED #8 PR title\n")
+                    (user . "OPEN CHANGES_REQUESTED #8 PR title [o/r]\n")))
+      (with-temp-buffer
+        (magit-section-mode)
+        (let ((inhibit-read-only t)
+              (magh-magit-summary-scope (car case)))
+          (magit-insert-section (status)
+            (magh-magit--insert-topic 'pr context data)))
+        (should (string-match-p (regexp-quote (cdr case))
+                                (buffer-string)))))))
 
 (ert-deftest magh-magit-forge-duplicate-policy-keeps-actions ()
   (let ((magh-hide-forge-duplicates t)

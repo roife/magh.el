@@ -159,7 +159,7 @@
              :workflow (magh-ui--styled workflow 'magh-workflow)
              :updated (magh-ui--styled (magh-core--date updated) 'magh-date))
        (pcase kind
-         ('pr '(:state :identifier :title :review))
+         ('pr '(:state :review :identifier :title))
          ('issue '(:state :identifier :title))
          ('run '(:state :title :workflow))
          ('release '(:identifier :title))))

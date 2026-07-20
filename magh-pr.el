@@ -60,7 +60,8 @@
   (let* ((resource (magh-pr--resource context data))
          (number (plist-get resource :number)))
     (magh-ui--section (pr number resource t)
-      (magh-ui--format-row (magh-pr--row-values data))
+      (magh-ui--format-row (magh-pr--row-values data)
+                           '(:state :review :identifier :title))
       (magh-ui--insert-header
        "Branches" (format "%s → %s"
                           (alist-get 'headRefName data)
