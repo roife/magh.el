@@ -294,6 +294,16 @@ When FORCE is non-nil, bypass the shared query cache."
         (insert (propertize "  No matching items\n"
                             'font-lock-face 'shadow))))))
 
+(defun magh-magit--insert-items (kind context items)
+  "Insert KIND rows from ITEMS directly into the current section."
+  (if items
+      (dolist (item (seq-take items magh-magit-list-limit))
+        (if (eq kind 'run)
+            (magh-magit--insert-run context item)
+          (magh-magit--insert-topic kind context item)))
+    (insert (propertize "  No matching items\n"
+                        'font-lock-face 'shadow))))
+
 (defun magh-magit--insert-repository-data (context sections data)
   "Insert repository-scoped SECTIONS from DATA in CONTEXT."
   (when (memq 'pr sections)
@@ -308,18 +318,19 @@ When FORCE is non-nil, bypass the shared query cache."
            (other (seq-difference items current #'equal)))
       (magh-ui--ensure-section-gap)
       (magit-insert-section (magh-pull-requests)
-        (magit-insert-heading "Pull requests")
+        (magit-insert-heading "Open Pull Requests")
         (magit-insert-section-body
-          (when current
-            (magh-magit--insert-group "Current branch" 'pr context current))
-          (magh-magit--insert-group "Open" 'pr context other)))))
+          (if current
+              (progn
+                (magh-magit--insert-group "Current branch" 'pr context current)
+                (magh-magit--insert-group "Other" 'pr context other))
+            (magh-magit--insert-items 'pr context other))))))
   (when (memq 'issue sections)
     (magh-ui--ensure-section-gap)
     (magit-insert-section (magh-issues)
-      (magit-insert-heading "Issues")
+      (magit-insert-heading "Open Issues")
       (magit-insert-section-body
-        (magh-magit--insert-group "Open" 'issue context
-                                (alist-get 'issue data)))))
+        (magh-magit--insert-items 'issue context (alist-get 'issue data)))))
   (when (memq 'run sections)
     (magh-ui--ensure-section-gap)
     (magit-insert-section (magh-actions)

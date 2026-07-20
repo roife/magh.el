@@ -107,7 +107,7 @@
         state (or state magh-default-pr-state))
   (let ((limit (or (plist-get params :limit) magh-list-limit)))
     (magh-ui--open-page
-     (magh-pr--buffer-name context nil state) context 'pr-list state
+     (magh-pr--buffer-name context) context 'pr-list state
      (lambda (success error force)
        (magh-api--pr-list context (append (list :state state :limit limit) params)
                         success error force))

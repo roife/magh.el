@@ -32,12 +32,11 @@
    :title (alist-get 'title data)
    :url (alist-get 'url data)))
 
-(defun magh-issue--buffer-name (context &optional number state)
-  "Return Issue buffer name for CONTEXT, NUMBER, and STATE."
+(defun magh-issue--buffer-name (context &optional number)
+  "Return Issue buffer name for CONTEXT and optional NUMBER."
   (if number
       (format "*magh: %s · Issue #%s*" (magh-context-repository context) number)
-    (format "*magh: %s · Issues · %s*" (magh-context-repository context)
-            state)))
+    (format "*magh: %s · Issues*" (magh-context-repository context))))
 
 (defun magh-issue--row-values (data)
   "Return display plist for Issue DATA."
@@ -95,7 +94,7 @@
         state (or state magh-default-issue-state))
   (let ((limit (or (plist-get params :limit) magh-list-limit)))
     (magh-ui--open-page
-     (magh-issue--buffer-name context nil state) context 'issue-list state
+     (magh-issue--buffer-name context) context 'issue-list state
      (lambda (success error force)
        (magh-api--issue-list
         context (append (list :state state :limit limit) params)

@@ -810,6 +810,47 @@
             (should-not (string-match-p "value=old" (buffer-string))))
         (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
+(ert-deftest magh-pr-cycle-state-refreshes-the-current-list-buffer ()
+  (let ((context (magh-context-from-repository "o/r"))
+        (magh-display-buffer-function #'identity)
+        states)
+    (cl-letf (((symbol-function 'magh-api--pr-list)
+               (lambda (_context params success _error &optional _force)
+                 (push (plist-get params :state) states)
+                 (funcall success nil))))
+      (let ((buffer (magh-pr-list context "open")))
+        (unwind-protect
+            (with-current-buffer buffer
+              (should (eq (magh-pr-cycle-state) buffer))
+              (should (eq (current-buffer) buffer))
+              (should (equal (buffer-name) "*magh: o/r · Pull requests*"))
+              (should (equal magh-pr--state "closed"))
+              (should (equal magh-buffer-resource-id "closed"))
+              (should (string-match-p "Pull requests: closed"
+                                      (buffer-string)))
+              (should (equal states '("closed" "open"))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
+(ert-deftest magh-issue-cycle-state-refreshes-the-current-list-buffer ()
+  (let ((context (magh-context-from-repository "o/r"))
+        (magh-display-buffer-function #'identity)
+        states)
+    (cl-letf (((symbol-function 'magh-api--issue-list)
+               (lambda (_context params success _error &optional _force)
+                 (push (plist-get params :state) states)
+                 (funcall success nil))))
+      (let ((buffer (magh-issue-list context "open")))
+        (unwind-protect
+            (with-current-buffer buffer
+              (should (eq (magh-issue-cycle-state) buffer))
+              (should (eq (current-buffer) buffer))
+              (should (equal (buffer-name) "*magh: o/r · Issues*"))
+              (should (equal magh-issue--state "closed"))
+              (should (equal magh-buffer-resource-id "closed"))
+              (should (string-match-p "Issues: closed" (buffer-string)))
+              (should (equal states '("closed" "open"))))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
 (ert-deftest magh-ui-initial-render-installs-section-visibility-indicators ()
   (let ((magit-section-visibility-indicators
          '((?> . ?v) (?> . ?v)))
@@ -1085,6 +1126,26 @@
                              (lambda (a b)
                                (string< (symbol-name a) (symbol-name b))))
                        '(issue pr run)))))))
+
+(ert-deftest magh-magit-collapses-sole-open-state-into-parent-heading ()
+  (let ((context (magh-context-from-repository "o/r")))
+    (with-temp-buffer
+      (magit-section-mode)
+      (let ((inhibit-read-only t))
+        (magit-insert-section (status)
+          (magh-magit--insert-repository-data context '(pr issue) nil)))
+      (should (string-match-p "Open Pull Requests\n" (buffer-string)))
+      (should (string-match-p "Open Issues\n" (buffer-string)))
+      (should-not (string-match-p "\nOpen\n" (buffer-string))))
+    (with-temp-buffer
+      (magit-section-mode)
+      (let ((inhibit-read-only t))
+        (magit-insert-section (status)
+          (magh-magit--insert-user-data context '(pr issue) nil)))
+      (should (string-match-p "Pull requests\n" (buffer-string)))
+      (should (string-match-p "Issues\n" (buffer-string)))
+      (should-not (string-match-p "Open Pull Requests" (buffer-string)))
+      (should-not (string-match-p "Open Issues" (buffer-string))))))
 
 (ert-deftest magh-magit-forge-duplicate-policy-keeps-actions ()
   (let ((magh-hide-forge-duplicates t)
