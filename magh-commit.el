@@ -21,7 +21,6 @@
 (require 'magh-ui)
 
 (defvar-local magh-commit--params nil)
-(defvar-local magh-commit--limit nil)
 (defvar-local magh-commit--sha nil)
 (defvar-local magh-commit--review-number nil)
 (defvar-local magh-commit--review-head nil)
@@ -118,8 +117,7 @@
      (lambda (success error force)
        (magh-api--commit-page context params nil success error force))
      (lambda (data) (magh-commit--render-list context params data))
-     :setup (lambda ()
-              (setq magh-commit--params params magh-commit--limit magh-list-limit)))))
+     :setup (lambda () (setq magh-commit--params params)))))
 
 (defun magh-commit-load-more ()
   "Append the next page to the current commit history."

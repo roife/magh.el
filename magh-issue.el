@@ -382,20 +382,19 @@
 
 ;;; Actions
 
-(defun magh-issue--current ()
-  "Return (CONTEXT NUMBER) for the current Issue action."
+(defun magh-issue--current (&optional context number)
+  "Return resolved (CONTEXT NUMBER) for the current Issue action."
   (let ((resource (or magh-issue--dispatch-resource (magh-ui-resource-at-point))))
-    (list (or (plist-get resource :context) magh-buffer-context)
-          (or (plist-get resource :number)
+    (list (magh-ui--repository-context
+           (or context (plist-get resource :context) magh-buffer-context))
+          (or number (plist-get resource :number)
               (and (eq magh-buffer-resource-kind 'issue) magh-buffer-resource-id)))))
 
 ;;;###autoload
 (defun magh-issue-comment (body &optional context number)
   "Add BODY to Issue NUMBER in CONTEXT."
   (interactive (list (read-string "Comment: ")))
-  (pcase-let ((`(,current-context ,current-number) (magh-issue--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          number (or number current-number))
+  (pcase-let ((`(,context ,number) (magh-issue--current context number)))
     (magh-api--issue-comment context number body
                            (lambda (_) (message "Comment added")
                              (magh-ui--refresh-if-page))
@@ -404,9 +403,7 @@
 (defun magh-issue-close (&optional context number)
   "Close Issue NUMBER in CONTEXT, prompting for reason and comment."
   (interactive)
-  (pcase-let ((`(,current-context ,current-number) (magh-issue--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          number (or number current-number))
+  (pcase-let ((`(,context ,number) (magh-issue--current context number)))
     (when (magh-core--confirm (format "Close Issue #%s? " number))
       (let ((reason (completing-read "Reason: " '("completed" "not planned")
                                      nil t nil nil "completed"))
@@ -420,9 +417,7 @@
 (defun magh-issue-reopen (&optional context number)
   "Reopen Issue NUMBER in CONTEXT."
   (interactive)
-  (pcase-let ((`(,current-context ,current-number) (magh-issue--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          number (or number current-number))
+  (pcase-let ((`(,context ,number) (magh-issue--current context number)))
     (let ((comment (read-string "Reopen comment (optional): ")))
       (magh-api--issue-reopen
        context number (unless (string-empty-p comment) comment)
@@ -433,9 +428,7 @@
 (defun magh-issue-pin (&optional unpin context number)
   "Pin Issue NUMBER, or UNPIN it with prefix argument."
   (interactive "P")
-  (pcase-let ((`(,current-context ,current-number) (magh-issue--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          number (or number current-number))
+  (pcase-let ((`(,context ,number) (magh-issue--current context number)))
     (magh-api--issue-pin
      context number (not unpin)
      (lambda (_) (message "Issue #%s %s" number (if unpin "unpinned" "pinned"))
@@ -445,9 +438,7 @@
 (defun magh-issue-lock (&optional unlock context number)
   "Lock Issue NUMBER, or UNLOCK it with prefix argument."
   (interactive "P")
-  (pcase-let ((`(,current-context ,current-number) (magh-issue--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          number (or number current-number))
+  (pcase-let ((`(,context ,number) (magh-issue--current context number)))
     (let ((reason (and (not unlock)
                        (completing-read "Lock reason (optional): "
                                         '("off-topic" "too heated" "resolved" "spam")
@@ -469,9 +460,7 @@ With CHECKOUT non-nil, check out the new branch."
                                          (magh-context-default-branch
                                           magh-buffer-context)) "main"))
          (y-or-n-p "Checkout branch? ")))
-  (pcase-let ((`(,current-context ,current-number) (magh-issue--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          number (or number current-number))
+  (pcase-let ((`(,context ,number) (magh-issue--current context number)))
     (magh-api--issue-develop
      context number branch base checkout
      (lambda (_) (message "Created linked branch %s" branch))

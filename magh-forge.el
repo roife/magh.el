@@ -126,12 +126,9 @@ KIND, NUMBER, and RESOURCE identify the selected magh.el candidate."
     (user-error "Forge is not installed"))
   (let* ((topic (forge-current-topic t))
          (resource (magh-resource-from-url (forge-get-url topic))))
-    (pcase (plist-get resource :kind)
-      ('issue (magh-issue-view (plist-get resource :number)
-                             (plist-get resource :context)))
-      ('pr (magh-pr-view (plist-get resource :number)
-                       (plist-get resource :context)))
-      (_ (user-error "Current Forge topic is not a GitHub Issue or Pull Request")))))
+    (unless (memq (plist-get resource :kind) '(issue pr))
+      (user-error "Current Forge topic is not a GitHub Issue or Pull Request"))
+    (magh-forge--open-native resource)))
 
 ;;;###autoload
 (defun magh-forge-remove-repository (&optional repository-url)

@@ -272,20 +272,19 @@
 
 ;;; Actions
 
-(defun magh-release--current ()
-  "Return (CONTEXT TAG) for current Release action."
+(defun magh-release--current (&optional context tag)
+  "Return resolved (CONTEXT TAG) for the current Release action."
   (let ((resource (or magh-release--dispatch-resource (magh-ui-resource-at-point))))
-    (list (or (plist-get resource :context) magh-buffer-context)
-          (or (plist-get resource :tag) magh-release--tag
+    (list (magh-ui--repository-context
+           (or context (plist-get resource :context) magh-buffer-context))
+          (or tag (plist-get resource :tag) magh-release--tag
               (and (eq magh-buffer-resource-kind 'release)
                    magh-buffer-resource-id)))))
 
 (defun magh-release-publish (&optional context tag)
   "Publish draft Release TAG."
   (interactive)
-  (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          tag (or tag current-tag))
+  (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
     (magh-api--release-edit
      context tag '(:draft :json-false)
      (lambda (_) (message "Published %s" tag)
@@ -295,9 +294,7 @@
 (defun magh-release-mark-latest (&optional context tag)
   "Mark Release TAG as latest."
   (interactive)
-  (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          tag (or tag current-tag))
+  (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
     (magh-api--release-edit
      context tag '(:latest t)
      (lambda (_) (message "%s is now latest" tag)
@@ -307,9 +304,7 @@
 (defun magh-release-toggle-prerelease (&optional context tag)
   "Toggle prerelease state for Release TAG."
   (interactive)
-  (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          tag (or tag current-tag))
+  (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
     (magh-api--release-get
      context tag
      (lambda (data)
@@ -324,9 +319,7 @@
 (defun magh-release-delete (&optional context tag)
   "Delete Release TAG."
   (interactive)
-  (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          tag (or tag current-tag))
+  (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
     (when (magh-core--confirm (format "Delete Release %s? " tag))
       (magh-api--release-delete
        context tag (lambda (_) (message "Deleted Release %s" tag))
@@ -335,10 +328,8 @@
 (defun magh-release-download (&optional context tag patterns directory)
   "Download assets from Release TAG matching PATTERNS into DIRECTORY."
   (interactive)
-  (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          tag (or tag current-tag)
-          patterns (or patterns
+  (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
+    (setq patterns (or patterns
                        (let ((text (read-string "Asset glob (empty for all): ")))
                          (unless (string-empty-p text) (list text))))
           directory (or directory
@@ -355,9 +346,7 @@
 (defun magh-release-upload (files &optional clobber context tag)
   "Upload FILES to Release TAG, replacing assets when CLOBBER."
   (interactive (list (list (read-file-name "Asset: ")) current-prefix-arg))
-  (pcase-let ((`(,current-context ,current-tag) (magh-release--current)))
-    (setq context (magh-ui--repository-context (or context current-context))
-          tag (or tag current-tag))
+  (pcase-let ((`(,context ,tag) (magh-release--current context tag)))
     (magh-api--release-upload
      context tag files clobber
      (lambda (_) (message "Uploaded %d asset(s)" (length files))

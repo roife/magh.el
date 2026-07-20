@@ -230,35 +230,27 @@
             (kill-new content)
             (message "Copied remote file contents"))))
 
+(defun magh-embark--topic-action (target issue-action pr-action)
+  "Apply ISSUE-ACTION or PR-ACTION to the topic represented by TARGET."
+  (let* ((resource (magh-embark--resource target))
+         (action (pcase (plist-get resource :kind)
+                   ('issue issue-action)
+                   ('pr pr-action)
+                   (_ (user-error "Target is not an Issue or Pull Request")))))
+    (funcall action (plist-get resource :context)
+             (plist-get resource :number))))
+
 (defun magh-embark-edit-topic (target)
   "Edit Issue or Pull Request TARGET."
-  (let* ((resource (magh-embark--resource target))
-         (context (plist-get resource :context))
-         (number (plist-get resource :number)))
-    (pcase (plist-get resource :kind)
-      ('issue (magh-issue-edit context number))
-      ('pr (magh-pr-edit context number))
-      (_ (user-error "Target is not an Issue or Pull Request")))))
+  (magh-embark--topic-action target #'magh-issue-edit #'magh-pr-edit))
 
 (defun magh-embark-close-topic (target)
   "Close Issue or Pull Request TARGET."
-  (let* ((resource (magh-embark--resource target))
-         (context (plist-get resource :context))
-         (number (plist-get resource :number)))
-    (pcase (plist-get resource :kind)
-      ('issue (magh-issue-close context number))
-      ('pr (magh-pr-close context number))
-      (_ (user-error "Target is not an Issue or Pull Request")))))
+  (magh-embark--topic-action target #'magh-issue-close #'magh-pr-close))
 
 (defun magh-embark-reopen-topic (target)
   "Reopen Issue or Pull Request TARGET."
-  (let* ((resource (magh-embark--resource target))
-         (context (plist-get resource :context))
-         (number (plist-get resource :number)))
-    (pcase (plist-get resource :kind)
-      ('issue (magh-issue-reopen context number))
-      ('pr (magh-pr-reopen context number))
-      (_ (user-error "Target is not an Issue or Pull Request")))))
+  (magh-embark--topic-action target #'magh-issue-reopen #'magh-pr-reopen))
 
 (defun magh-embark-rerun (target)
   "Rerun Actions Run TARGET."

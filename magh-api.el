@@ -269,26 +269,50 @@ Call CALLBACK with data, optionally processed by TRANSFORM."
   "Return repeated FLAG arguments for VALUES."
   (seq-mapcat (lambda (value) (list flag value)) values))
 
+(defun magh-api--plist-args (values specs)
+  "Build CLI arguments from VALUES according to SPECS.
+Each entry is (KEY FLAG KIND), where KIND is `repeat', `switch', `boolean',
+`present', `raw', or nil for an optional FLAG value."
+  (cl-loop for (key flag kind) in specs
+           for value = (plist-get values key)
+           append (pcase kind
+                    ('repeat (magh-api--repeated-flags flag value))
+                    ('switch (and (magh-api--true-p value) (list flag)))
+                    ('boolean (and (plist-member values key)
+                                   (magh-api--boolean-flag flag value)))
+                    ('present (and (plist-member values key)
+                                   (list flag (or value ""))))
+                    ('raw (and value (list flag value)))
+                    (_ (magh-api--flag flag value)))))
+
 (defun magh-api--topic-edit-args (values)
   "Return CLI arguments shared by Issue and Pull Request edits."
   (append
    (magh-api--flag "--milestone" (plist-get values :milestone))
    (when (plist-get values :remove-milestone) '("--remove-milestone"))
-   (cl-loop for (key flag) in
-            '((:add-reviewers "--add-reviewer")
-              (:remove-reviewers "--remove-reviewer")
-              (:add-assignees "--add-assignee")
-              (:remove-assignees "--remove-assignee")
-              (:add-labels "--add-label")
-              (:remove-labels "--remove-label")
-              (:add-projects "--add-project")
-              (:remove-projects "--remove-project"))
-            append (magh-api--repeated-flags flag (plist-get values key)))
+   (magh-api--plist-args
+    values '((:add-reviewers "--add-reviewer" repeat)
+             (:remove-reviewers "--remove-reviewer" repeat)
+             (:add-assignees "--add-assignee" repeat)
+             (:remove-assignees "--remove-assignee" repeat)
+             (:add-labels "--add-label" repeat)
+             (:remove-labels "--remove-label" repeat)
+             (:add-projects "--add-project" repeat)
+             (:remove-projects "--remove-project" repeat)))
    (when (plist-member values :body) '("--body-file" "-"))))
 
 (defun magh-api--flatten-pages (data)
   "Flatten `gh api --paginate --slurp' DATA."
   (apply #'append data))
+
+(defun magh-api--read-rest-pages
+    (context endpoint fields callback errback force domain
+             &optional transform headers)
+  "Read paginated REST ENDPOINT with FIELDS and flatten its result."
+  (magh-api--read-json
+   context (magh-api--rest-argv endpoint "GET" fields t headers) callback errback
+   :force force :transform (or transform #'magh-api--flatten-pages)
+   :domain domain))
 
 (defun magh-api--decode-content (data)
   "Decode GitHub Contents API DATA as UTF-8 text."
@@ -344,13 +368,10 @@ HEADERS is a list of complete header strings."
     (context callback errback &optional force)
   "Fetch repositories starred by the current account."
   (setq context (magh-api--context context))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv "user/starred" "GET"
-                      `((per_page . ,(min 100 magh-list-limit))) t
-                      '("Accept: application/vnd.github.star+json"))
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'starred)))
+  (magh-api--read-rest-pages
+   context "user/starred" `((per_page . ,(min 100 magh-list-limit)))
+   callback errback force (magh-api--domain context 'starred) nil
+   '("Accept: application/vnd.github.star+json")))
 
 (defun magh-api--review-requests (context callback errback &optional force)
   "Fetch pull requests requesting review from the current account."
@@ -416,52 +437,40 @@ HEADERS is a list of complete header strings."
 (defun magh-api--repo-branches (context callback errback &optional force)
   "Fetch repository branches."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv (magh-core--repo-endpoint context "branches") "GET"
-                      `((per_page . ,(min 100 magh-list-limit))) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'branch)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context "branches")
+   `((per_page . ,(min 100 magh-list-limit))) callback errback force
+   (magh-api--domain context 'branch)))
 
 (defun magh-api--repo-tags (context callback errback &optional force)
   "Fetch repository tags."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv (magh-core--repo-endpoint context "tags") "GET"
-                      `((per_page . ,(min 100 magh-list-limit))) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'tag)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context "tags")
+   `((per_page . ,(min 100 magh-list-limit))) callback errback force
+   (magh-api--domain context 'tag)))
 
 (defun magh-api--repo-labels (context callback errback &optional force)
   "Fetch labels available in CONTEXT."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv (magh-core--repo-endpoint context "labels") "GET"
-                      '((per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'label)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context "labels") '((per_page . 100))
+   callback errback force (magh-api--domain context 'label)))
 
 (defun magh-api--repo-milestones (context callback errback &optional force)
   "Fetch open milestones available in CONTEXT."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv (magh-core--repo-endpoint context "milestones") "GET"
-                      '((state . "open") (per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'milestone)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context "milestones")
+   '((state . "open") (per_page . 100)) callback errback force
+   (magh-api--domain context 'milestone)))
 
 (defun magh-api--repo-collaborators (context callback errback &optional force)
   "Fetch assignable repository collaborators."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv (magh-core--repo-endpoint context "assignees") "GET"
-                      '((per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'collaborator)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context "assignees") '((per_page . 100))
+   callback errback force (magh-api--domain context 'collaborator)))
 
 (defun magh-api--project-owner (context &optional owner)
   "Return explicit OWNER, CONTEXT owner, or the current account marker."
@@ -550,11 +559,10 @@ INCLUDE-CLOSED is non-nil, include closed Projects."
    (append
     (list "project" "edit" (format "%s" number) "--owner" owner
           "--format" "json")
-    (cl-loop for (key flag) in
-             '((:title "--title") (:description "--description")
-               (:readme "--readme") (:visibility "--visibility"))
-             when (plist-member values key)
-             append (list flag (or (plist-get values key) ""))))
+    (magh-api--plist-args
+     values '((:title "--title" present) (:description "--description" present)
+              (:readme "--readme" present)
+              (:visibility "--visibility" present))))
    (magh-api--project-domains context owner number) callback errback))
 
 (defun magh-api--project-close
@@ -601,10 +609,8 @@ INCLUDE-CLOSED is non-nil, include closed Projects."
   (magh-api--mutate-json
    context
    (append (list "project" "item-edit" "--id" item-id "--format" "json")
-           (when (plist-member values :title)
-             (list "--title" (or (plist-get values :title) "")))
-           (when (plist-member values :body)
-             (list "--body" (or (plist-get values :body) ""))))
+           (magh-api--plist-args
+            values '((:title "--title" present) (:body "--body" present))))
    (magh-api--project-domains context owner number) callback errback))
 
 (defun magh-api--project-field-args
@@ -669,15 +675,12 @@ data type.  VALUE is ignored when CLEAR is non-nil."
      (append (list "repo" "create"
                    (if-let* ((owner (plist-get values :owner)))
                        (format "%s/%s" owner name) name))
-             (magh-api--flag "--description" (plist-get values :description))
-             (magh-api--flag "--homepage" (plist-get values :homepage))
-             (when (magh-api--true-p (plist-get values :private)) (list "--private"))
-             (when (magh-api--true-p (plist-get values :public)) (list "--public"))
-             (when (magh-api--true-p (plist-get values :internal)) (list "--internal"))
-             (magh-api--flag "--template" (plist-get values :template))
-             (magh-api--flag "--source" (plist-get values :source))
-             (when (magh-api--true-p (plist-get values :push)) (list "--push"))
-             (when (magh-api--true-p (plist-get values :clone)) (list "--clone")))
+             (magh-api--plist-args
+              values '((:description "--description") (:homepage "--homepage")
+                       (:private "--private" switch) (:public "--public" switch)
+                       (:internal "--internal" switch) (:template "--template")
+                       (:source "--source") (:push "--push" switch)
+                       (:clone "--clone" switch))))
      (magh-api--domain context 'repository-list) callback errback)))
 
 (defun magh-api--repo-clone (context directory callback errback &optional git-args)
@@ -694,10 +697,9 @@ data type.  VALUE is ignored when CLEAR is non-nil."
   (magh-api--mutate-text
    context
    (append (list "repo" "fork" (magh-context-repository context))
-           (magh-api--flag "--org" (plist-get values :organization))
-           (magh-api--flag "--remote-name" (plist-get values :remote-name))
-           (when (magh-api--true-p (plist-get values :clone)) (list "--clone"))
-           (when (magh-api--true-p (plist-get values :remote)) (list "--remote")))
+           (magh-api--plist-args
+            values '((:organization "--org") (:remote-name "--remote-name")
+                     (:clone "--clone" switch) (:remote "--remote" switch))))
    (list (magh-api--domain context 'repository)
          (magh-api--domain context 'viewer-fork)
          (magh-api--domain context 'repository-list))
@@ -727,22 +729,18 @@ data type.  VALUE is ignored when CLEAR is non-nil."
    context
    (append
     (list "repo" "edit" (magh-context-repository context))
-    (cl-loop for (key flag) in
-             '((:default-branch "--default-branch")
-               (:description "--description") (:homepage "--homepage")
-               (:visibility "--visibility"))
-             append (magh-api--flag flag (plist-get values key)))
-    (cl-loop for (key flag) in
-             '((:template "--template") (:issues "--enable-issues")
-               (:projects "--enable-projects")
-               (:discussions "--enable-discussions")
-               (:wiki "--enable-wiki")
-               (:merge-commit "--enable-merge-commit")
-               (:squash-merge "--enable-squash-merge")
-               (:rebase-merge "--enable-rebase-merge")
-               (:delete-branch-on-merge "--delete-branch-on-merge"))
-             when (plist-member values key)
-             append (magh-api--boolean-flag flag (plist-get values key)))
+    (magh-api--plist-args
+     values
+     '((:default-branch "--default-branch") (:description "--description")
+       (:homepage "--homepage") (:visibility "--visibility")
+       (:template "--template" boolean) (:issues "--enable-issues" boolean)
+       (:projects "--enable-projects" boolean)
+       (:discussions "--enable-discussions" boolean)
+       (:wiki "--enable-wiki" boolean)
+       (:merge-commit "--enable-merge-commit" boolean)
+       (:squash-merge "--enable-squash-merge" boolean)
+       (:rebase-merge "--enable-rebase-merge" boolean)
+       (:delete-branch-on-merge "--delete-branch-on-merge" boolean)))
     (when (plist-get values :visibility)
       '("--accept-visibility-change-consequences"))
     (magh-api--repeated-flags "--add-topic" (plist-get values :add-topics))
@@ -796,49 +794,38 @@ data type.  VALUE is ignored when CLEAR is non-nil."
                                   magh-default-issue-state
                                 magh-default-pr-state))))
          (raw (string-trim (or (plist-get params :search) "")))
-         (parts
-          (list
-           (magh-api--search-qualifier
-            "repo" (magh-context-repository context))
-           (if (eq kind 'issue) "is:issue" "is:pr"))))
-    (setq parts
-          (append
-           parts
-           (pcase (cons kind state)
-             (`(issue . "open") '("is:open"))
-             (`(issue . "closed") '("is:closed"))
-             (`(pr . "open") '("is:open"))
-             (`(pr . "closed") '("is:closed" "is:unmerged"))
-             (`(pr . "merged") '("is:merged"))
-             (_ nil))))
+         ;; Build in reverse so repeated filters stay linear without changing
+         ;; their stable CLI order.
+         (parts (list (if (eq kind 'issue) "is:issue" "is:pr")
+                      (magh-api--search-qualifier
+                       "repo" (magh-context-repository context)))))
+    (dolist (part (pcase (cons kind state)
+                    (`(issue . "open") '("is:open"))
+                    (`(issue . "closed") '("is:closed"))
+                    (`(pr . "open") '("is:open"))
+                    (`(pr . "closed") '("is:closed" "is:unmerged"))
+                    (`(pr . "merged") '("is:merged"))))
+      (push part parts))
     (dolist (entry `(("assignee" . ,(plist-get params :assignee))
                      ("author" . ,(plist-get params :author))
                      ("mentions" . ,(plist-get params :mention))
                      ("milestone" . ,(plist-get params :milestone))))
-      (when (cdr entry)
-        (setq parts
-              (append parts
-                      (list (magh-api--search-qualifier
-                             (car entry) (cdr entry)))))))
+      (when-let* ((value (cdr entry)))
+        (push (magh-api--search-qualifier (car entry) value) parts)))
     (dolist (label (plist-get params :labels))
-      (setq parts
-            (append parts
-                    (list (magh-api--search-qualifier "label" label)))))
+      (push (magh-api--search-qualifier "label" label) parts))
     (when (eq kind 'pr)
       (dolist (entry `(("base" . ,(plist-get params :base))
                        ("head" . ,(plist-get params :head))))
-        (when (cdr entry)
-          (setq parts
-                (append parts
-                        (list (magh-api--search-qualifier
-                               (car entry) (cdr entry)))))))
+        (when-let* ((value (cdr entry)))
+          (push (magh-api--search-qualifier (car entry) value) parts)))
       (when (magh-api--true-p (plist-get params :draft))
-        (setq parts (append parts '("draft:true")))))
+        (push "draft:true" parts)))
     (unless (string-empty-p raw)
-      (setq parts (append parts (list raw))))
+      (push raw parts))
     (unless (string-match-p "\\(?:\\`\\|[[:space:]]\\)sort:" raw)
-      (setq parts (append parts '("sort:created-desc"))))
-    (string-join parts " ")))
+      (push "sort:created-desc" parts))
+    (string-join (nreverse parts) " ")))
 
 (defun magh-api--normalize-topic-node (node)
   "Normalize GraphQL search NODE to the shapes used by native pages."
@@ -890,12 +877,10 @@ data type.  VALUE is ignored when CLEAR is non-nil."
                 "--limit" (number-to-string
                             (or (plist-get params :limit) magh-list-limit))
                 "--json" (magh-api--fields magh-api--issue-list-fields))
-          (magh-api--flag "--search" (plist-get params :search))
-          (magh-api--flag "--assignee" (plist-get params :assignee))
-          (magh-api--flag "--author" (plist-get params :author))
-          (magh-api--flag "--mention" (plist-get params :mention))
-          (magh-api--flag "--milestone" (plist-get params :milestone))
-          (magh-api--repeated-flags "--label" (plist-get params :labels))
+          (magh-api--plist-args
+           params '((:search "--search") (:assignee "--assignee")
+                    (:author "--author") (:mention "--mention")
+                    (:milestone "--milestone") (:labels "--label" repeat)))
           (magh-api--repo-args context))))
     (magh-api--read-json context argv callback errback :force force
                        :domain (magh-api--domain context 'issue))))
@@ -919,10 +904,10 @@ data type.  VALUE is ignored when CLEAR is non-nil."
      context
      (append (list "issue" "create" "--title" (plist-get values :title)
                    "--body-file" "-")
-             (magh-api--repeated-flags "--assignee" (plist-get values :assignees))
-             (magh-api--repeated-flags "--label" (plist-get values :labels))
-             (magh-api--repeated-flags "--project" (plist-get values :projects))
-             (magh-api--flag "--milestone" (plist-get values :milestone))
+             (magh-api--plist-args
+              values '((:assignees "--assignee" repeat)
+                       (:labels "--label" repeat) (:projects "--project" repeat)
+                       (:milestone "--milestone")))
              (magh-api--repo-args context))
      (magh-api--domain context 'issue) callback errback :stdin body)))
 
@@ -1022,13 +1007,10 @@ data type.  VALUE is ignored when CLEAR is non-nil."
           "--state" (or (plist-get params :state) magh-default-pr-state)
           "--limit" (number-to-string (or (plist-get params :limit) magh-list-limit))
           "--json" (magh-api--fields magh-api--pr-list-fields))
-    (magh-api--flag "--search" (plist-get params :search))
-    (magh-api--flag "--assignee" (plist-get params :assignee))
-    (magh-api--flag "--author" (plist-get params :author))
-    (magh-api--flag "--base" (plist-get params :base))
-    (magh-api--flag "--head" (plist-get params :head))
-    (magh-api--repeated-flags "--label" (plist-get params :labels))
-    (when (magh-api--true-p (plist-get params :draft)) (list "--draft"))
+    (magh-api--plist-args
+     params '((:search "--search") (:assignee "--assignee")
+              (:author "--author") (:base "--base") (:head "--head")
+              (:labels "--label" repeat) (:draft "--draft" switch)))
     (magh-api--repo-args context))
    callback errback :force force :domain (magh-api--domain context 'pr)))
 
@@ -1045,35 +1027,26 @@ data type.  VALUE is ignored when CLEAR is non-nil."
 (defun magh-api--pr-commits (context number callback errback &optional force)
   "Fetch commits belonging to Pull Request NUMBER."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv
-    (magh-core--repo-endpoint context (format "pulls/%d/commits" number))
-    "GET" '((per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'pr-commit number)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context (format "pulls/%d/commits" number))
+   '((per_page . 100)) callback errback force
+   (magh-api--domain context 'pr-commit number)))
 
 (defun magh-api--pr-files (context number callback errback &optional force)
   "Fetch changed files for Pull Request NUMBER."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv
-    (magh-core--repo-endpoint context (format "pulls/%d/files" number))
-    "GET" '((per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'pr-file number)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context (format "pulls/%d/files" number))
+   '((per_page . 100)) callback errback force
+   (magh-api--domain context 'pr-file number)))
 
 (defun magh-api--pr-reviews (context number callback errback &optional force)
   "Fetch submitted reviews for Pull Request NUMBER."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv
-    (magh-core--repo-endpoint context (format "pulls/%d/reviews" number))
-    "GET" '((per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'pr number)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context (format "pulls/%d/reviews" number))
+   '((per_page . 100)) callback errback force
+   (magh-api--domain context 'pr number)))
 
 (defun magh-api--compare (context base head callback errback &optional force)
   "Fetch the repository comparison from BASE through HEAD."
@@ -1093,13 +1066,10 @@ data type.  VALUE is ignored when CLEAR is non-nil."
     (context number callback errback &optional force)
   "Fetch inline review comments for Pull Request NUMBER."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv
-    (magh-core--repo-endpoint context (format "pulls/%d/comments" number))
-    "GET" '((per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'pr-review-comment number)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context (format "pulls/%d/comments" number))
+   '((per_page . 100)) callback errback force
+   (magh-api--domain context 'pr-review-comment number)))
 
 (defun magh-api--pr-review-thread-pages (data)
   "Return review thread metadata nodes from paginated GraphQL DATA."
@@ -1261,14 +1231,12 @@ degrades to readable and replyable threads without resolution capabilities."
    context
    (append (list "pr" "create" "--title" (plist-get values :title)
                  "--body-file" "-")
-           (magh-api--flag "--base" (plist-get values :base))
-           (magh-api--flag "--head" (plist-get values :head))
-           (magh-api--repeated-flags "--reviewer" (plist-get values :reviewers))
-           (magh-api--repeated-flags "--assignee" (plist-get values :assignees))
-           (magh-api--repeated-flags "--label" (plist-get values :labels))
-           (magh-api--repeated-flags "--project" (plist-get values :projects))
-           (magh-api--flag "--milestone" (plist-get values :milestone))
-           (when (magh-api--true-p (plist-get values :draft)) (list "--draft"))
+           (magh-api--plist-args
+            values '((:base "--base") (:head "--head")
+                     (:reviewers "--reviewer" repeat)
+                     (:assignees "--assignee" repeat) (:labels "--label" repeat)
+                     (:projects "--project" repeat) (:milestone "--milestone")
+                     (:draft "--draft" switch)))
            (magh-api--repo-args context))
    (magh-api--domain context 'pr) callback errback
    :stdin (or (plist-get values :body) "")))
@@ -1335,14 +1303,11 @@ degrades to readable and replyable threads without resolution capabilities."
    (append (list "pr" "merge" (number-to-string number)
                  (pcase method ('rebase "--rebase") ('squash "--squash")
                         (_ "--merge")))
-           (when (magh-api--true-p (plist-get options :admin)) (list "--admin"))
-           (when (magh-api--true-p (plist-get options :auto)) (list "--auto"))
-           (when (magh-api--true-p (plist-get options :delete-branch))
-             (list "--delete-branch"))
-           (magh-api--flag "--subject" (plist-get options :subject))
-           (magh-api--flag "--body" (plist-get options :body))
-           (magh-api--flag "--match-head-commit"
-                         (plist-get options :match-head-commit))
+           (magh-api--plist-args
+            options '((:admin "--admin" switch) (:auto "--auto" switch)
+                      (:delete-branch "--delete-branch" switch)
+                      (:subject "--subject") (:body "--body")
+                      (:match-head-commit "--match-head-commit")))
            (magh-api--repo-args context))
    (magh-api--domain context 'pr) callback errback))
 
@@ -1545,13 +1510,10 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
                  "--limit" (number-to-string
                              (or (plist-get params :limit) magh-list-limit))
                  "--json" (magh-api--fields magh-api--run-fields))
-           (magh-api--flag "--workflow" (plist-get params :workflow))
-           (magh-api--flag "--branch" (plist-get params :branch))
-           (magh-api--flag "--event" (plist-get params :event))
-           (magh-api--flag "--status" (plist-get params :status))
-           (magh-api--flag "--user" (plist-get params :user))
-           (magh-api--flag "--commit" (plist-get params :commit))
-           (when (magh-api--true-p (plist-get params :all)) (list "--all"))
+           (magh-api--plist-args
+            params '((:workflow "--workflow") (:branch "--branch")
+                     (:event "--event") (:status "--status") (:user "--user")
+                     (:commit "--commit") (:all "--all" switch)))
            (magh-api--repo-args context))
    callback errback :force force :domain (magh-api--domain context 'run)))
 
@@ -1575,14 +1537,11 @@ When HEAD-SHA is non-nil, bind a newly created pending review to that commit."
     (context run-id callback errback &optional force)
   "Fetch artifacts produced by workflow RUN-ID."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv
-    (magh-core--repo-endpoint
-     context (format "actions/runs/%s/artifacts" run-id))
-    "GET" '((per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--artifact-pages
-   :domain (magh-api--domain context 'artifact run-id)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint
+            context (format "actions/runs/%s/artifacts" run-id))
+   '((per_page . 100)) callback errback force
+   (magh-api--domain context 'artifact run-id) #'magh-api--artifact-pages))
 
 (defun magh-api--artifact-download
     (context run-id names directory callback errback)
@@ -1770,15 +1729,11 @@ When NAMES is nil, download every artifact in the run."
      context
      (append (list "release" "create" (plist-get values :tag))
              (when send-body (list "--notes-file" "-"))
-             (magh-api--flag "--title" (plist-get values :title))
-             (magh-api--flag "--target" (plist-get values :target))
-             (magh-api--flag "--notes-start-tag"
-                           (plist-get values :notes-start-tag))
-             (when (magh-api--true-p (plist-get values :draft)) (list "--draft"))
-             (when (magh-api--true-p (plist-get values :prerelease))
-               (list "--prerelease"))
-             (when (magh-api--true-p (plist-get values :latest))
-               (list "--latest"))
+             (magh-api--plist-args
+              values '((:title "--title") (:target "--target")
+                       (:notes-start-tag "--notes-start-tag")
+                       (:draft "--draft" switch) (:prerelease "--prerelease" switch)
+                       (:latest "--latest" switch)))
              (when generate (list "--generate-notes"))
              (magh-api--repo-args context))
      (magh-api--domain context 'release) callback errback
@@ -1804,14 +1759,10 @@ When NAMES is nil, download every artifact in the run."
     (magh-api--mutate-text
      context
      (append (list "release" "edit" tag)
-             (magh-api--flag "--tag" (plist-get values :tag))
-             (magh-api--flag "--title" (plist-get values :title))
-             (magh-api--flag "--target" (plist-get values :target))
-             (when (plist-member values :draft)
-               (magh-api--boolean-flag "--draft" (plist-get values :draft)))
-             (when (plist-member values :prerelease)
-               (magh-api--boolean-flag "--prerelease"
-                                     (plist-get values :prerelease)))
+             (magh-api--plist-args
+              values '((:tag "--tag") (:title "--title") (:target "--target")
+                       (:draft "--draft" boolean)
+                       (:prerelease "--prerelease" boolean)))
              (when (magh-api--true-p (plist-get values :latest))
                '("--latest"))
              (when bodyp '("--notes-file" "-"))
@@ -1901,13 +1852,10 @@ When NAMES is nil, download every artifact in the run."
 (defun magh-api--commit-comments (context sha callback errback &optional force)
   "Fetch comments for Commit SHA."
   (setq context (magh-api--context context t))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv
-    (magh-core--repo-endpoint context (format "commits/%s/comments" sha))
-    "GET" '((per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'commit-comment sha)))
+  (magh-api--read-rest-pages
+   context (magh-core--repo-endpoint context (format "commits/%s/comments" sha))
+   '((per_page . 100)) callback errback force
+   (magh-api--domain context 'commit-comment sha)))
 
 (defun magh-api--commit-comment (context sha body path position callback errback)
   "Comment BODY on Commit SHA, optionally at PATH and diff POSITION."
@@ -1955,14 +1903,11 @@ When NAMES is nil, download every artifact in the run."
     (context unread-only callback errback &optional force)
   "Fetch notifications, restricting to unread when UNREAD-ONLY."
   (setq context (magh-api--context context))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv
-    "notifications" "GET"
-    `((all . ,(if unread-only :json-false t))
-      (participating . :json-false) (per_page . 100)) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'notification)))
+  (magh-api--read-rest-pages
+   context "notifications"
+   `((all . ,(if unread-only :json-false t))
+     (participating . :json-false) (per_page . 100))
+   callback errback force (magh-api--domain context 'notification)))
 
 (defun magh-api--notification-read (context id callback errback)
   "Mark notification thread ID as read."
@@ -2004,16 +1949,14 @@ When NAMES is nil, download every artifact in the run."
    (list "search" (symbol-name kind) query
          "--limit" (number-to-string magh-list-limit)
          "--json" (alist-get kind magh-api--search-fields))
-   (cl-loop for (key flag) in
-            '((:repo "--repo") (:owner "--owner")
-              (:state "--state") (:author "--author")
-              (:assignee "--assignee")
-              (:review-requested "--review-requested")
-              (:language "--language") (:filename "--filename")
-              (:extension "--extension") (:sort "--sort")
-              (:order "--order"))
-            for value = (plist-get options key)
-            when value append (list flag value))))
+   (magh-api--plist-args
+    options '((:repo "--repo" raw) (:owner "--owner" raw)
+              (:state "--state" raw) (:author "--author" raw)
+              (:assignee "--assignee" raw)
+              (:review-requested "--review-requested" raw)
+              (:language "--language" raw) (:filename "--filename" raw)
+              (:extension "--extension" raw) (:sort "--sort" raw)
+              (:order "--order" raw)))))
 
 (defun magh-api--search (context kind query callback errback &optional force options)
   "Search KIND for QUERY using OPTIONS plist."
@@ -2131,12 +2074,9 @@ When NAMES is nil, download every artifact in the run."
     (dolist (entry '((:title . title) (:body . body)
                      (:category-id . categoryId)))
       (when (plist-member values (car entry))
-        (setq input
-              (append input
-                      (list (cons (cdr entry)
-                                  (or (plist-get values (car entry)) "")))))))
+        (push (cons (cdr entry) (or (plist-get values (car entry)) "")) input)))
     (magh-api--discussion-mutate
-     context magh-api--discussion-update-mutation input
+     context magh-api--discussion-update-mutation (nreverse input)
      (magh-api--discussion-domains context number) callback errback)))
 
 (defun magh-api--discussion-comment
@@ -2186,12 +2126,9 @@ When NAMES is nil, download every artifact in the run."
 (defun magh-api--gist-list (context callback errback &optional force)
   "Fetch gists for the current account."
   (setq context (magh-api--context context))
-  (magh-api--read-json
-   context
-   (magh-api--rest-argv "gists" "GET"
-                      `((per_page . ,(min 100 magh-list-limit))) t)
-   callback errback :force force :transform #'magh-api--flatten-pages
-   :domain (magh-api--domain context 'gist)))
+  (magh-api--read-rest-pages
+   context "gists" `((per_page . ,(min 100 magh-list-limit)))
+   callback errback force (magh-api--domain context 'gist)))
 
 (defun magh-api--gist-get (context id callback errback &optional force)
   "Fetch Gist ID."

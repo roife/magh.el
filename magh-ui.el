@@ -146,11 +146,10 @@
 (define-derived-mode magh-section-mode magit-section-mode "Magh"
   "Major mode for native Magit-like GitHub resource pages."
   :group 'magh
-  (setq-local truncate-lines magh-view-truncate-lines)
-  (setq-local magit-section-initial-visibility-alist
-              magh-section-initial-visibility-alist)
-  (setq-local revert-buffer-function
-              (lambda (&rest _) (magh-ui-refresh t)))
+  (setq-local truncate-lines magh-view-truncate-lines
+              magit-section-initial-visibility-alist
+              magh-section-initial-visibility-alist
+              revert-buffer-function (lambda (&rest _) (magh-ui-refresh t)))
   (add-hook 'kill-buffer-hook #'magh-ui--remember-visibility nil t))
 
 (defmacro magh-ui--section (spec heading &rest body)

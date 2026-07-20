@@ -83,19 +83,15 @@
         :stdin (and stdin (secure-hash 'sha256 stdin))
         :argv argv))
 
-(defun magh-client--subscriber-live-p (subscriber)
-  "Return non-nil if SUBSCRIBER can still receive a callback."
-  (buffer-live-p (magh-client--subscriber-buffer subscriber)))
-
 (defun magh-client--deliver-success (subscriber value)
   "Deliver VALUE to SUBSCRIBER if its source buffer is live."
-  (when (magh-client--subscriber-live-p subscriber)
+  (when (buffer-live-p (magh-client--subscriber-buffer subscriber))
     (with-current-buffer (magh-client--subscriber-buffer subscriber)
       (funcall (magh-client--subscriber-success subscriber) value))))
 
 (defun magh-client--deliver-error (subscriber error)
   "Deliver typed ERROR to SUBSCRIBER if its source buffer is live."
-  (when (magh-client--subscriber-live-p subscriber)
+  (when (buffer-live-p (magh-client--subscriber-buffer subscriber))
     (with-current-buffer (magh-client--subscriber-buffer subscriber)
       (funcall (magh-client--subscriber-error subscriber) error))))
 

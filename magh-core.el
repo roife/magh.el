@@ -268,9 +268,8 @@ Plain alists are accepted for compatibility with renderer callers."
 (defun magh-core--remote-components (remote)
   "Parse REMOTE into (HOST OWNER NAME), or return nil."
   (when (and remote (not (string-empty-p remote)))
-    (let* ((remote (car (split-string remote "[?#]")))
-           (remote (string-remove-suffix "/" remote))
-           host path)
+    (let ((remote (string-remove-suffix "/" (car (split-string remote "[?#]"))))
+          host path)
       (cond
        ((string-match
          "\\`\\(?:https?\\|ssh\\)://\\(?:[^/@]+@\\)?\\([^/]+\\)/\\(.+\\)\\'"
@@ -329,13 +328,9 @@ skipped."
                              root "config" "--get"
                              (format "branch.%s.remote" branch)))
                        "origin")
-                 remotes)))
-         candidates)
-    ;; `delete-dups' retains later duplicates, which would invert the explicit
-    ;; priority above when a requested remote also occurs in REMOTES.
-    (dolist (candidate ordered)
-      (unless (member candidate candidates)
-        (setq candidates (append candidates (list candidate)))))
+                 ;; Copy REMOTES so destructive de-duplication cannot alter it.
+                 remotes nil)))
+         (candidates (delete-dups ordered)))
     (cl-find-if
      (lambda (remote)
        (and (member remote remotes)

@@ -278,6 +278,16 @@ With INCLUDE-CLOSED, include closed Projects."
          'project magh-buffer-context :owner magh-project--owner
          :number magh-project--number :id magh-project--id))))
 
+(defun magh-project--resolve-location (resource context owner number)
+  "Resolve (CONTEXT OWNER NUMBER) from RESOURCE and explicit arguments."
+  (setq context (magh-context-resolve
+                 (or context (magh-project--item-context resource))))
+  (list context
+        (or owner (magh-project--item-owner resource)
+            (magh-project--default-owner context))
+        (or number (magh-project--item-project-number resource)
+            (read-number "Project number: "))))
+
 ;;;###autoload
 (defun magh-project-create (&optional context owner)
   "Create a Project for OWNER using a structured editor."
@@ -317,12 +327,8 @@ With INCLUDE-CLOSED, include closed Projects."
   (let* ((resource (magh-project--current-resource))
          (project (or (magh-batch-value magh-ui--data 'project)
                       (plist-get resource :data))))
-    (setq context (magh-context-resolve
-                   (or context (magh-project--item-context resource)))
-          owner (or owner (magh-project--item-owner resource)
-                    (magh-project--default-owner context))
-          number (or number (magh-project--item-project-number resource)
-                     (read-number "Project number: ")))
+    (pcase-setq `(,context ,owner ,number)
+                (magh-project--resolve-location resource context owner number))
     ;; List responses are not guaranteed to carry the full README.  Fetch the
     ;; detail before editing instead of risking an accidental clear.
     (if (and project (assq 'readme project))
@@ -340,12 +346,8 @@ With INCLUDE-CLOSED, include closed Projects."
          (project (or (magh-batch-value magh-ui--data 'project)
                       (plist-get resource :data)))
          (closed (magh-api--true-p (alist-get 'closed project))))
-    (setq context (magh-context-resolve
-                   (or context (magh-project--item-context resource)))
-          owner (or owner (magh-project--item-owner resource)
-                    (magh-project--default-owner context))
-          number (or number (magh-project--item-project-number resource)
-                     (read-number "Project number: ")))
+    (pcase-setq `(,context ,owner ,number)
+                (magh-project--resolve-location resource context owner number))
     (when (or closed
               (magh-core--confirm (format "Close Project #%s? " number)))
       (magh-api--project-close
@@ -360,13 +362,9 @@ With INCLUDE-CLOSED, include closed Projects."
   "Add the Issue or Pull Request URL to Project NUMBER."
   (interactive)
   (let ((resource (magh-project--current-resource)))
-    (setq context (magh-context-resolve
-                   (or context (magh-project--item-context resource)))
-          owner (or owner (magh-project--item-owner resource)
-                    (magh-project--default-owner context))
-          number (or number (magh-project--item-project-number resource)
-                     (read-number "Project number: "))
-          url (or url (read-string "Issue or Pull Request URL: ")))
+    (pcase-setq `(,context ,owner ,number)
+                (magh-project--resolve-location resource context owner number))
+    (setq url (or url (read-string "Issue or Pull Request URL: ")))
     (magh-api--project-item-add
      context owner number url
      (lambda (_) (message "Added item to Project #%s" number)
@@ -378,12 +376,8 @@ With INCLUDE-CLOSED, include closed Projects."
   "Create a draft Issue in Project NUMBER."
   (interactive)
   (let ((resource (magh-project--current-resource)))
-    (setq context (magh-context-resolve
-                   (or context (magh-project--item-context resource)))
-          owner (or owner (magh-project--item-owner resource)
-                    (magh-project--default-owner context))
-          number (or number (magh-project--item-project-number resource)
-                     (read-number "Project number: ")))
+    (pcase-setq `(,context ,owner ,number)
+                (magh-project--resolve-location resource context owner number))
     (magh-edit-open
      (format "*magh: %s · Project #%s Draft*" owner number)
      '((:name title :required t)) nil ""
